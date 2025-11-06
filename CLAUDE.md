@@ -1,67 +1,35 @@
-# Claude Code プロジェクトルール
+# Go Rules
 
-## Go 言語開発のルール
+## Imports (Critical)
 
-### Import 文の扱い（最重要）
+Add import WITH its usage code in same Edit. Editor auto-removes unused imports on save.
 
-**エディタが未使用のimportを自動削除するため、importとその使用コードを同じEditで実装すること**
+Bad: Add import -> save -> deleted -> add usage -> re-add import
+Good: Add import + usage code together in single Edit
 
-```go
-// ❌ 悪い例: importだけ追加 → 保存で削除される → 再追加...の無駄な繰り返し
-import "encoding/json"
+## Package Verification
 
-// ✅ 良い例: importと使用コードを同時に実装
-import "encoding/json"
+Before using packages:
+- Stdlib: verify with `go doc <package>` if uncertain
+- Third-party: Read go.mod first. If missing: ask user, then `go get`, then use
 
-func process(data interface{}) ([]byte, error) {
-    return json.Marshal(data)  // 同じEditで実装
-}
-```
+## Compile Errors
 
-### パッケージの存在確認
+Fix all editor-detected errors before completing (undefined vars, type mismatches, missing imports, nonexistent fields/methods)
 
-**存在しないパッケージを使用しない：**
+## Comments
 
-1. **標準ライブラリ**: 不確かなら `go doc <package>` で確認
-2. **サードパーティ**: `go.mod` を Read ツールで確認。存在しない場合:
-   - ユーザーに確認
-   - `go get <package>` でインストール
-   - その後にコードで使用
+Write only:
+- Why (not what) - rationale and intent
+- Complex logic, non-obvious constraints
+- Godoc for exported functions
 
-### コンパイルエラーの確認
+Avoid:
+- Self-explanatory code descriptions
+- Restating what code obviously does
 
-**エディタが検出する自明なエラー（未定義変数、型エラー、存在しないメソッド等）を見逃さず、必ず修正してから完了とする**
+Example: "Retry 3 times due to API rate limits" (good) vs "increment i" (bad)
 
-よくあるエラー:
-- 未定義の変数/関数
-- 型の不一致
-- Import不足
-- 存在しないフィールド/メソッド
+## Edit Tool
 
-## コメントの記述方針
-
-**自明なコメントは書かない。本当に必要なコメントのみ記述：**
-
-### 書くべき
-- **なぜ（Why）** その実装をしたのか
-- 複雑なロジック、非自明な制約
-- エクスポート関数の godoc
-
-### 書くべきでない
-- **何を（What）** しているかだけの説明（コードを読めば分かる）
-
-```go
-// ❌ 自明
-i++  // iをインクリメント
-
-// ✅ 必要な情報
-// 外部APIの制限により3回までリトライ
-for i := 0; i < 3; i++ { ... }
-```
-
-**基本方針**: コード自体を読みやすく。コメントはコードで表現できないことのみ。
-
-## Edit ツールの使用
-
-1. **原子的な変更**: 関連する変更は1つのEditにまとめる
-2. **特にimport追加時**: importとその使用コードを同時に実装
+Combine related changes in single Edit, especially imports with usage code

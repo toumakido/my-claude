@@ -1,108 +1,68 @@
-以下のユーザープロンプトから、問題を明確に定義した GitHub issue を作成してください: $ARGUMENTS
+Create clear GitHub issue from user prompt: $ARGUMENTS
 
-## 目的
-`/fix-github-issue` が効果的に動作するための問題定義を作成する。実装の詳細は fix-github-issue が担当するため、ここでは問題の明確化に集中する。
+Output language: Japanese, formal business tone
 
-## 実行手順
+## Process
 
-### 1. プロンプトの分析と情報収集
-- ユーザープロンプト「$ARGUMENTS」を分析
-- issue の種類を判断（バグ、機能要望、改善提案）
-- 重複 issue をチェック: `gh issue list --search "$KEYWORDS"`
-- **AskUserQuestion で必要最小限の情報を質問**:
-  - 問題の詳細や背景
-  - 再現手順（バグの場合）
-  - 期待される動作
-  - 実際の動作（バグの場合）
-  - 環境情報（該当する場合）
+1. Analyze prompt, determine type (bug/feature/enhancement)
+2. Check duplicates: `gh issue list --search "$KEYWORDS"`
+3. Use AskUserQuestion for minimal required info
+4. Create title format: `[Bug] ログイン時に無限ループが発生` or `[Feature] ダークモード対応`
+5. Create body using templates below
+6. Show to user for confirmation
+7. Create with `gh issue create`
 
-### 2. Issue タイトルの作成
-明確で具体的なタイトル:
-- `[Bug] ログイン時に無限ループが発生`
-- `[Feature] ダークモード対応`
-- `[Enhancement] API レスポンス速度の改善`
+## Templates
 
-### 3. Issue 本文の作成
-
-#### バグ報告:
-```markdown
+Bug:
+```
 ## 概要
-[問題の簡潔な説明]
+[brief description]
 
 ## 再現手順
-1. [ステップ1]
-2. [ステップ2]
-3. [ステップ3]
+1. [step]
 
 ## 期待される動作
-[何が起こるべきか]
+[expected]
 
 ## 実際の動作
-[実際に何が起こるか]
-
-## エラーメッセージ
-```
-[エラーログ]
-```
+[actual]
 
 ## 環境情報
-- OS: [例: macOS 14.0]
-- ブラウザ/Node.js: [該当するもの]
-- バージョン: [v1.2.3]
+- OS: [e.g. macOS 14.0]
 ```
 
-#### 機能要望:
-```markdown
+Feature:
+```
 ## 概要
-[機能の簡潔な説明]
+[brief description]
 
 ## 背景・目的
-[なぜこの機能が必要か、どんな問題を解決するか]
+[why needed]
 
 ## 期待される動作
-[この機能がどう動作すべきか]
-
-## 補足情報
-[UI/UX の期待、参考例など]
+[how it should work]
 ```
 
-#### 改善提案:
-```markdown
+Enhancement:
+```
 ## 概要
-[改善内容の簡潔な説明]
+[brief description]
 
 ## 現状の問題点
-[現在何が問題か、なぜ改善が必要か]
+[current issue]
 
 ## 期待される改善結果
-[改善後どうなるべきか]
+[expected improvement]
 ```
 
-### 4. ラベルの設定
-基本的なラベルのみ:
-- 種類: `bug`, `enhancement`, `feature`
-- 優先度: `priority:high`, `priority:medium`, `priority:low`
+## Labels
 
-### 5. ユーザー確認
-作成内容をユーザーに提示して確認
+Type: bug, enhancement, feature
+Priority: priority:high, priority:medium, priority:low
 
-### 6. Issue の作成
-```bash
-gh issue create \
-  --title "タイトル" \
-  --body "$(cat <<'EOF'
-[本文]
-EOF
-)" \
-  --label "ラベル1,ラベル2"
-```
+## Follow-up
 
-### 7. フォローアップ
-- issue 番号と URL を提示
-- `/fix-github-issue [番号]` で修正を開始できることを案内
+Show issue number/URL and suggest `/fix-github-issue [number]`
 
-## 注意事項
-- **問題定義に集中**: 実装方法や技術的詳細は含めない
-- **簡潔に**: fix-github-issue が必要とする情報のみ
-- **明確に**: 曖昧な表現を避ける
-- セキュリティ情報や機密情報を含めない
+Focus on problem definition only, not implementation details
