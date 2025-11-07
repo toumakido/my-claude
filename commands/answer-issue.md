@@ -11,7 +11,7 @@ Output language: Japanese, formal business tone
 
 ## Purpose
 
-Efficiently investigate and answer questions about structured GitHub issues without necessarily implementing fixes. Optimized for issues created by `/create-structured-issue` or `/restructure-issue`.
+Efficiently investigate and answer questions about structured GitHub issues without necessarily implementing fixes. Optimized for issues created by `/structure-issue` or `/restructure-issue`.
 
 ## Process
 
@@ -45,7 +45,7 @@ Efficiently investigate and answer questions about structured GitHub issues with
 
    [actionable recommendations]
    ```
-7. If fix is needed, suggest: `/fix-github-issue <issue_number>`
+7. If fix is needed, suggest: `/work-on-issue <issue_number>`
 
 ## Efficiency Guidelines
 
@@ -96,7 +96,7 @@ Always structure response as:
 
 ### 推奨される次のステップ
 1. [actionable step]
-2. [if fix needed] `/fix-github-issue <number>` を実行
+2. [if fix needed] `/work-on-issue <number>` を実行
 ```
 
 ## Notes

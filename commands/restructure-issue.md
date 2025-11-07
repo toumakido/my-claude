@@ -4,7 +4,7 @@ Output language: Japanese, formal business tone
 
 ## Purpose
 
-Transform vague/incomplete issues into format that `/fix-github-issue` can work with effectively. Focus on problem clarity, not implementation.
+Transform vague/incomplete issues into format that `/work-on-issue` can work with effectively. Focus on problem clarity, not implementation.
 
 ## Process
 
@@ -24,7 +24,7 @@ EOF
 )"
 gh issue edit $ARGUMENTS --add-label "label1,label2"
 ```
-9. Show issue URL and suggest `/fix-github-issue $ARGUMENTS`
+9. Show issue URL and suggest `/work-on-issue $ARGUMENTS`
 
 ## Templates
 

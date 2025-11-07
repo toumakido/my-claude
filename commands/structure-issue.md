@@ -63,6 +63,6 @@ Priority: priority:high, priority:medium, priority:low
 
 ## Follow-up
 
-Show issue number/URL and suggest `/fix-github-issue [number]`
+Show issue number/URL and suggest `/work-on-issue [number]`
 
 Focus on problem definition only, not implementation details
