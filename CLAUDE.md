@@ -1,6 +1,23 @@
+# Communication Style
+
+Be direct and concise. DO NOT include:
+- Reactions to user prompts ("Great question!", "Excellent!", "最高ですね！", etc.)
+- Unnecessary praise or validation ("Perfect!", "Well done!", "完璧です", etc.)
+- Emotional expressions or enthusiasm markers
+- Status updates like "Done!" or "Complete!" at the end
+
+Only output:
+- Essential information and explanations
+- Necessary clarifications or questions
+- Direct responses to tasks
+
+Example:
+- Bad: "素晴らしい質問ですね！それでは実装を始めます。完璧です！"
+- Good: [Starts implementation directly]
+
 # Go Rules
 
-## Imports (Critical)
+## Imports
 
 Add import WITH its usage code in same Edit. Editor auto-removes unused imports on save.
 
