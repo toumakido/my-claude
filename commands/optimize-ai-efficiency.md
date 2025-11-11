@@ -16,11 +16,12 @@ Output language: Japanese, formal business tone
    - `CLAUDE.md` (global configuration)
    - `.claude/*` (if exists)
 2. Identify optimization opportunities based on check criteria
-3. Apply optimizations using Edit tool
-4. Create branch: `optimize/ai-efficiency-YYYYMMDD`
-5. Commit with summary
-6. Create PR: `gh pr create --repo toumakido/my-claude`
-7. Display PR URL and summary
+3. If no optimizations found: report that files are already optimal and exit (do not create PR)
+4. If optimizations found: apply using Edit tool
+5. Create branch: `optimize/ai-efficiency-YYYYMMDD`
+6. Commit with summary
+7. Create PR: `gh pr create --repo toumakido/my-claude`
+8. Display PR URL and summary
 
 ## Check Criteria
 
@@ -128,8 +129,9 @@ Nice-to-have: Minor formatting, additional examples
 
 ## Notes
 
+- Only apply changes when genuine optimizations are identified
+- Do not make unnecessary changes for the sake of changing
 - Preserve human readability
 - Do not change command functionality
 - Prefer explicit over implicit
-- If no optimizations: report and exit
-- If breaking changes: confirm with user
+- If breaking changes: confirm with user first

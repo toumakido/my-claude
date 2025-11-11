@@ -17,6 +17,11 @@ Output language: Japanese, formal business tone
    - Service client creation patterns
    - API call syntax and context usage
    - Context propagation in Repository/Service layers
+   - Pagination patterns (ScanPages/QueryPages → Paginator)
+   - Expression parameter types (ExpressionAttributeNames/Values)
+   - Enum type comparisons (remove pointer dereference)
+   - Setter methods → direct field assignment
+   - Marshal/Unmarshal package changes
    - Error handling
 4. Execute automatic migration for each file:
    - Update import statements
@@ -28,6 +33,7 @@ Output language: Japanese, formal business tone
 5. Update go.mod dependencies:
    - Add v2 dependencies: `go get github.com/aws/aws-sdk-go-v2/config`
    - Add required service packages
+   - DynamoDB: add attributevalue package: `go get github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue`
    - Run `go mod tidy`
 6. Verify compilation and context usage:
    - `go build ./...`
@@ -120,22 +126,155 @@ MessageAttributeNames: []string{"UserID", "RPID"}
 ### DynamoDB
 ```go
 // v1
-import "github.com/aws/aws-sdk-go/service/dynamodb"
+import (
+    "github.com/aws/aws-sdk-go/service/dynamodb"
+    "github.com/aws/aws-sdk-go/service/dynamodb/dynamodbattribute"
+)
 
 var DynamoClient *dynamodb.DynamoDB
+
+// AttributeValue
 Item: map[string]*dynamodb.AttributeValue{
     "Key": {S: aws.String("value")},
 }
+
+// Expression parameters
+ExpressionAttributeNames: map[string]*string{
+    "#Key": aws.String("RealKey"),
+}
+ExpressionAttributeValues: map[string]*dynamodb.AttributeValue{
+    ":val": {S: aws.String("value")},
+}
+
+// Setter methods
+input.SetProjectionExpression("Key1,Key2")
+
+// KeyType comparison
+if keyElement.KeyType != nil && *keyElement.KeyType == dynamodb.KeyTypeHash {
+    // process
+}
+
+// Marshal/Unmarshal
+dynamodbattribute.UnmarshalMap(resp.Item, &result)
+dynamodbattribute.MarshalMap(item)
+
+// Pagination
+err = client.ScanPages(input,
+    func(page *dynamodb.ScanOutput, lastPage bool) bool {
+        for _, item := range page.Items {
+            // process
+        }
+        return len(page.LastEvaluatedKey) > 0
+    })
+
+err = client.QueryPages(input,
+    func(page *dynamodb.QueryOutput, lastPage bool) bool {
+        for _, item := range page.Items {
+            // process
+        }
+        return !lastPage
+    })
 
 // v2
 import (
     "github.com/aws/aws-sdk-go-v2/service/dynamodb"
     "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+    "github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 )
 
 var DynamoClient *dynamodb.Client
+
+// AttributeValue (type changed)
 Item: map[string]types.AttributeValue{
     "Key": &types.AttributeValueMemberS{Value: "value"},
+}
+
+// Expression parameters (no pointers)
+ExpressionAttributeNames: map[string]string{
+    "#Key": "RealKey",
+}
+ExpressionAttributeValues: map[string]types.AttributeValue{
+    ":val": &types.AttributeValueMemberS{Value: "value"},
+}
+
+// Direct field assignment
+projExpr := "Key1,Key2"
+input.ProjectionExpression = &projExpr
+
+// KeyType comparison (no pointer dereference)
+if keyElement.KeyType == types.KeyTypeHash {
+    // process
+}
+
+// Marshal/Unmarshal (package changed)
+attributevalue.UnmarshalMap(resp.Item, &result)
+attributevalue.MarshalMap(item)
+
+// Pagination with Paginator
+paginator := dynamodb.NewScanPaginator(client, input)
+for paginator.HasMorePages() {
+    page, err := paginator.NextPage(ctx)
+    if err != nil {
+        // handle error
+        break
+    }
+    for _, item := range page.Items {
+        // process
+    }
+}
+
+queryPaginator := dynamodb.NewQueryPaginator(client, queryInput)
+for queryPaginator.HasMorePages() {
+    page, err := queryPaginator.NextPage(ctx)
+    if err != nil {
+        break
+    }
+    for _, item := range page.Items {
+        // process
+    }
+}
+```
+
+## Context Usage Guidelines
+
+- **handler/controller layer**: Obtain context from web framework
+- **usecase/service layer**: Receive as parameter, pass to lower layers
+- **repository/infrastructure layer**: Receive as parameter, use for AWS API calls
+- **test/fake implementations**: Use `context.TODO()` or `context.Background()`
+- **main function/initialization**: Use `context.Background()` or `context.TODO()`
+
+```go
+// Test/fake implementation example
+func (f *FakeService) Cleanup() {
+    ctx := context.TODO()
+    resp, err := f.client.ListTables(ctx, &dynamodb.ListTablesInput{})
+    // ...
+}
+
+// Repository layer example
+func (r *Repository) GetItem(ctx context.Context, id string) (Item, error) {
+    result, err := r.dynamoClient.GetItem(ctx, &dynamodb.GetItemInput{
+        TableName: aws.String(r.tableName),
+        Key: map[string]types.AttributeValue{
+            "ID": &types.AttributeValueMemberS{Value: id},
+        },
+    })
+    // ...
+}
+```
+
+## Web Framework Integration
+
+### Echo Framework
+
+```go
+// Obtain context from Echo in handler layer
+func (h *Handler) GetItem(c echo.Context) error {
+    ctx := c.Request().Context()
+
+    // Pass to repository/service layer
+    result, err := h.repository.GetItem(ctx, id)
+    // ...
 }
 ```
 
