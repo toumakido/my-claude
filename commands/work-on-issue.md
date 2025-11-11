@@ -25,13 +25,9 @@ fix: <brief> (#$ISSUE_NUMBER)
 - scope
 
 Fixes #$ISSUE_NUMBER
-
-Generated with [Claude Code](https://claude.com/claude-code)
-
-Co-Authored-By: Claude <noreply@anthropic.com>
 ```
 9. Create PR with `gh pr create`, include: problem summary, fix details, test method, screenshots (if UI), Fixes #$ISSUE_NUMBER
-10. Show PR URL
+10. Output only: `https://github.com/user/repo/pull/123`
 
 ## Error Handling
 
