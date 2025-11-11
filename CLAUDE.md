@@ -43,3 +43,19 @@ Example: "Retry 3 times due to API rate limits" (good) vs "increment i" (bad)
 ## Edit Tool
 
 Combine related changes in single Edit, especially imports with usage code
+
+# Git Commit
+
+DO NOT include these in commit messages:
+- "🤖 Generated with [Claude Code](https://claude.com/claude-code)"
+- "Co-Authored-By: Claude <noreply@anthropic.com>"
+
+Commit format:
+```
+<type>: <brief> (#<issue_number>)
+
+- details
+- scope
+
+Fixes #<issue_number>
+```
