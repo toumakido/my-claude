@@ -35,9 +35,16 @@ Output language: Japanese, formal business tone
    - Add required service packages
    - DynamoDB: add attributevalue package: `go get github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue`
    - Run `go mod tidy`
+   - If submodules exist (independent go.mod files in subdirectories):
+     - Update dependencies in each submodule directory (e.g., `cd lambda/ses-notification && go get github.com/aws/aws-sdk-go-v2/...`)
+     - Run `go mod tidy` in each submodule
+     - Run `go build` in each submodule to verify
 6. Verify compilation and context usage:
-   - `go build ./...`
-   - Check for inappropriate context.Background() usage: `grep -r "context.Background()" --include="*.go" | grep -v "func main\|func init"`
+   - Root directory: `go build ./...`
+   - Each submodule: `go build .`
+   - Run tests if available: `go test ./...`
+   - Check for inappropriate context.Background() usage: `grep -r "context.Background()" --include="*.go" | grep -v "func main\|func init\|_test.go"`
+   - Verify no type errors (especially enum types, types.X usage)
 7. Report migration summary with file count and changes
 
 ## Migration Patterns
@@ -110,7 +117,140 @@ import (
 )
 ```
 
+### Types Package Import
+
+Many services require explicit import of `types` package separately from service package:
+
+```go
+// Import types package as needed
+import (
+    "github.com/aws/aws-sdk-go-v2/service/ses"
+    sestypes "github.com/aws/aws-sdk-go-v2/service/ses/types"
+
+    "github.com/aws/aws-sdk-go-v2/service/sesv2"
+    sesv2types "github.com/aws/aws-sdk-go-v2/service/sesv2/types"
+
+    "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider"
+    idptypes "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider/types"
+)
+```
+
+Types package is needed for:
+- Request/Response struct field types (Body, Message, Content, etc.)
+- Enum type constants (AuthFlowType, SuppressionListReason, etc.)
+- Data types like AttributeValue
+
 ## Service-Specific Patterns
+
+### SES/SESv2
+
+#### Address Lists Type Change
+```go
+// v1
+to := []*string{}
+cc := []*string{}
+replyTo := []*string{}
+for _, obj := range recipients {
+    to = append(to, obj.Address())  // *string
+}
+
+// v2
+to := []string{}
+cc := []string{}
+replyTo := []string{}
+for _, obj := range recipients {
+    to = append(to, swag.StringValue(obj.Address()))  // string
+}
+
+// v2 API call
+client.SendEmail(ctx, &ses.SendEmailInput{
+    Message: &sestypes.Message{
+        Subject: &sestypes.Content{...},
+        Body: body,
+    },
+    Source: mail.From.Address(),
+    Destination: &sestypes.Destination{
+        ToAddresses:  to,      // []string
+        CcAddresses:  cc,      // []string
+        BccAddresses: bcc,     // []string
+    },
+    ReplyToAddresses: replyTo,  // []string
+})
+```
+
+#### SESv2 Type Constants
+```go
+// v1
+import "github.com/aws/aws-sdk-go/service/sesv2"
+
+input := &sesv2.PutSuppressedDestinationInput{
+    Reason: aws.String(sesv2.SuppressionListReasonBounce),
+    EmailAddress: aws.String(email),
+}
+
+// v2
+import (
+    "github.com/aws/aws-sdk-go-v2/service/sesv2"
+    sesv2types "github.com/aws/aws-sdk-go-v2/service/sesv2/types"
+)
+
+input := &sesv2.PutSuppressedDestinationInput{
+    Reason: sesv2types.SuppressionListReasonBounce,  // use type constant
+    EmailAddress: aws.String(email),
+}
+```
+
+#### Types Package Import
+```go
+// Required: import both ses and sestypes
+import (
+    "github.com/aws/aws-sdk-go-v2/service/ses"
+    sestypes "github.com/aws/aws-sdk-go-v2/service/ses/types"
+)
+```
+
+### Cognito
+
+#### AuthFlow and AuthParameters Type Change
+```go
+// v1
+import idp "github.com/aws/aws-sdk-go/service/cognitoidentityprovider"
+
+output, err := idp.New(sess).InitiateAuthWithContext(ctx, &idp.InitiateAuthInput{
+    ClientId: aws.String(clientID),
+    AuthFlow: aws.String("USER_PASSWORD_AUTH"),
+    AuthParameters: map[string]*string{
+        "USERNAME": aws.String(username),
+        "PASSWORD": aws.String(password),
+    },
+})
+
+// v2
+import (
+    idp "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider"
+    idptypes "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider/types"
+)
+
+client := idp.NewFromConfig(cfg)
+authFlow := idptypes.AuthFlowTypeUserPasswordAuth
+output, err := client.InitiateAuth(ctx, &idp.InitiateAuthInput{
+    ClientId: aws.String(clientID),
+    AuthFlow: authFlow,  // enum type
+    AuthParameters: map[string]string{  // no pointers
+        "USERNAME": username,
+        "PASSWORD": password,
+    },
+})
+```
+
+#### AuthenticationResultType Type Change
+```go
+// v1
+result *idp.AuthenticationResultType
+
+// v2
+result *idptypes.AuthenticationResultType
+```
 
 ### SQS
 ```go
@@ -233,6 +373,30 @@ for queryPaginator.HasMorePages() {
         // process
     }
 }
+```
+
+## X-Ray Instrumentation
+
+### v2 SDK Support
+```go
+// v1
+import "github.com/aws/aws-xray-sdk-go/xray"
+
+sesClient := sesv2.New(session.Must(session.NewSession()))
+xray.AWS(sesClient.Client)
+
+// v2
+import (
+    "github.com/aws/aws-xray-sdk-go/instrumentation/awsv2"
+    "github.com/aws/aws-xray-sdk-go/xray"
+)
+
+cfg, err := config.LoadDefaultConfig(ctx)
+if err != nil {
+    return err
+}
+awsv2.AWSV2Instrumentor(&cfg.APIOptions)
+sesClient := sesv2.NewFromConfig(cfg)
 ```
 
 ## Context Usage Guidelines
