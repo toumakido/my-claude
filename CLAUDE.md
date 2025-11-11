@@ -17,13 +17,6 @@ Example:
 
 # Go Rules
 
-## Imports
-
-Add import WITH its usage code in same Edit. Editor auto-removes unused imports on save.
-
-Bad: Add import -> save -> deleted -> add usage -> re-add import
-Good: Add import + usage code together in single Edit
-
 ## Package Verification
 
 Before using packages:

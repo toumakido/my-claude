@@ -6,12 +6,21 @@ Output language: Japanese, formal business tone
 
 - gh CLI installed and authenticated
 - Must be executed in same conversation session after using target command
-- Run from toumakido/my-claude repository root
+- Working repository: Can be any repository where the command was used
+- Issue target repository: https://github.com/toumakido/my-claude (determined dynamically or confirmed with user)
 
 ## Parameters
 
-- `command-name`: Target command name to improve (e.g., `migrate-aws-sdk`, `review-pr`)
+- `$ARGUMENTS`: Target command name to improve (e.g., `migrate-aws-sdk`, `review-pr`, `improve-command`)
   - Must correspond to a file in `commands/` directory (without `.md` extension)
+  - Can be used recursively to improve improve-command itself
+
+## Usage
+
+```
+/improve-command migrate-aws-sdk
+/improve-command improve-command  # Recursive usage
+```
 
 ## Process
 
@@ -45,8 +54,11 @@ Output language: Japanese, formal business tone
      - 期待される効果: Expected benefits
      - 参考: Links to relevant PRs/commits (only if repository is public)
 6. Create GitHub issue:
-   - Use `gh issue create` with generated content
-   - Target repository: toumakido/my-claude
+   - Determine target repository:
+     - Check current repository: `gh repo view --json nameWithOwner -q .nameWithOwner`
+     - If current repository is toumakido/my-claude: Create issue here
+     - Otherwise: Confirm with user or default to https://github.com/toumakido/my-claude
+   - Use `gh issue create --repo toumakido/my-claude` with generated content
 7. Display created issue URL
 
 ## Issue Template Format
@@ -116,11 +128,38 @@ Output language: Japanese, formal business tone
 - No git history: Warn user but continue with conversation analysis only
 - gh CLI error: Display error and ask user to check authentication
 
+## Code Example Generalization
+
+When working repository is private, generalize code examples to avoid exposing confidential information:
+
+1. Extract general patterns from actual code
+2. Replace specific values with generic placeholders:
+   - Repository names → `example-repo`
+   - Variable names → descriptive generic names (`userId` → `entityId`)
+   - Function names → pattern-based names (`GetActiveUsers` → `FetchEntities`)
+   - Company/product-specific terms → generic terms
+3. Add explanatory comments to clarify intent
+
+Example transformation:
+```go
+// Actual code (private repository)
+func (repo *UserRepository) GetActiveUsers(ctx context.Context, companyId string) ([]*User, error) {
+    return repo.dynamoDB.QueryByCompany(ctx, companyId, "active")
+}
+
+// Generalized code (for issue)
+func (repo *EntityRepository) FetchEntities(ctx context.Context, filterKey string) ([]*Entity, error) {
+    return repo.store.QueryByFilter(ctx, filterKey, filterValue)
+}
+```
+
 ## Notes
 
 - This command works best when executed immediately after target command usage
 - Longer conversation history provides more context for analysis
 - Include specific code examples in proposals for clarity
 - For public repositories: Include PR/commit links as evidence
-- For private repositories: Omit PR/commit links from issue (not accessible to public)
+- For private repositories:
+  - Omit PR/commit links from issue (not accessible to public)
+  - Generalize code examples to remove confidential information
 - Consider both technical gaps and documentation improvements
