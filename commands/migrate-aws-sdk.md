@@ -16,18 +16,22 @@ Output language: Japanese, formal business tone
    - Session/Config initialization
    - Service client creation patterns
    - API call syntax and context usage
+   - Context propagation in Repository/Service layers
    - Error handling
 4. Execute automatic migration for each file:
    - Update import statements
    - Replace session initialization with config.LoadDefaultConfig
    - Update service client creation
-   - Add context parameters to API calls
+   - Add context parameters to API calls (propagate from caller, avoid context.Background() in non-entry points)
+   - Update interfaces to include context.Context parameters
    - Preserve existing logic and error handling
 5. Update go.mod dependencies:
    - Add v2 dependencies: `go get github.com/aws/aws-sdk-go-v2/config`
    - Add required service packages
    - Run `go mod tidy`
-6. Verify compilation: `go build ./...`
+6. Verify compilation and context usage:
+   - `go build ./...`
+   - Check for inappropriate context.Background() usage: `grep -r "context.Background()" --include="*.go" | grep -v "func main\|func init"`
 7. Report migration summary with file count and changes
 
 ## Migration Patterns
@@ -62,6 +66,26 @@ result, err := svc.GetObject(&s3.GetObjectInput{...})
 result, err := svc.GetObject(context.TODO(), &s3.GetObjectInput{...})
 ```
 
+### Context Propagation in Repository/Service Layer
+```go
+// v1
+func (repo *Repo) Put(item Item) error {
+    _, err := repo.dynamo.PutItem(&dynamodb.PutItemInput{...})
+    return err
+}
+
+// v2 - avoid creating context.Background() in non-entry points
+func (repo *Repo) Put(ctx context.Context, item Item) error {
+    _, err := repo.dynamo.PutItem(ctx, &dynamodb.PutItemInput{...})
+    return err
+}
+
+// Interface update required
+type Repository interface {
+    Put(context.Context, Item) error
+}
+```
+
 ### Import Paths
 ```go
 // v1
@@ -78,6 +102,41 @@ import (
     "github.com/aws/aws-sdk-go-v2/config"
     "github.com/aws/aws-sdk-go-v2/service/s3"
 )
+```
+
+## Service-Specific Patterns
+
+### SQS
+```go
+// v1
+MaxNumberOfMessages: aws.Int64(10)
+MessageAttributeNames: []*string{aws.String("UserID"), aws.String("RPID")}
+
+// v2
+MaxNumberOfMessages: aws.Int32(10)  // or just: 10
+MessageAttributeNames: []string{"UserID", "RPID"}
+```
+
+### DynamoDB
+```go
+// v1
+import "github.com/aws/aws-sdk-go/service/dynamodb"
+
+var DynamoClient *dynamodb.DynamoDB
+Item: map[string]*dynamodb.AttributeValue{
+    "Key": {S: aws.String("value")},
+}
+
+// v2
+import (
+    "github.com/aws/aws-sdk-go-v2/service/dynamodb"
+    "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+)
+
+var DynamoClient *dynamodb.Client
+Item: map[string]types.AttributeValue{
+    "Key": &types.AttributeValueMemberS{Value: "value"},
+}
 ```
 
 ## Notes
