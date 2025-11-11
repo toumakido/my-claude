@@ -25,6 +25,7 @@ Output language: Japanese, formal business tone
    - Note additional steps required beyond command specification
    - Find workarounds or fixes applied
 3. Analyze git history:
+   - Check if current repository is private: `gh repo view --json isPrivate`
    - Get recent commits: `git log --oneline -10`
    - Identify related PR: `gh pr list --limit 5`
    - Extract actual implementation changes
@@ -42,7 +43,7 @@ Output language: Japanese, formal business tone
      - 実際に発生した問題: Concrete problems encountered
      - 改善提案: Specific proposals with code samples
      - 期待される効果: Expected benefits
-     - 参考: Links to relevant PRs/commits
+     - 参考: Links to relevant PRs/commits (only if repository is public)
 6. Create GitHub issue:
    - Use `gh issue create` with generated content
    - Target repository: toumakido/my-claude
@@ -83,6 +84,8 @@ Output language: Japanese, formal business tone
 
 ## 参考
 
+(このセクションは作業対象リポジトリがpublicの場合のみ含める)
+
 - PR: [PR URL]
 - Commit: [commit hash/URL]
 ```
@@ -118,5 +121,6 @@ Output language: Japanese, formal business tone
 - This command works best when executed immediately after target command usage
 - Longer conversation history provides more context for analysis
 - Include specific code examples in proposals for clarity
-- Link to actual commits/PRs as evidence of issues
+- For public repositories: Include PR/commit links as evidence
+- For private repositories: Omit PR/commit links from issue (not accessible to public)
 - Consider both technical gaps and documentation improvements
