@@ -16,6 +16,21 @@ Output language: Japanese, formal business tone
 4. Create branch: `git checkout -b fix/issue-$ISSUE_NUMBER`
 5. Find related files using Task tool (subagent_type=Explore)
 6. Implement fix with Edit tool, avoid security issues (XSS, SQL injection), mark todos complete
+
+   **Before editing any file:**
+   - Read the target file (or similar files in same directory) to understand:
+     - Language (Japanese/English/Mixed)
+     - Code comment style
+     - Formatting conventions (indentation, line length, etc.)
+     - Section structure and naming
+   - Match the existing style in your edits
+
+   **When using Edit/Write tools:**
+   - Include brief explanation of changes:
+     - What is being changed/added
+     - Why this change addresses the issue
+     - Confirmation that existing style is matched
+   - For format-sensitive files (markdown, config), verify consistency
 7. Run tests (unit, integration, e2e), add new tests if needed
 8. Commit with format:
 ```
@@ -35,6 +50,53 @@ Fixes #$ISSUE_NUMBER
 - No issue: verify number
 - Test failure: analyze and continue fixing
 - PR creation failure: guide manual creation
+
+## File Edit Guidelines
+
+For ALL file edits (new creation or modification):
+
+1. **Understand existing style:**
+   - New file in existing directory: Read 2-3 similar files for reference
+   - Existing file modification: Read target file to understand style
+   - Pay attention to: language, comments, formatting, structure
+
+2. **Match the style:**
+   - If file/directory uses English comments → use English
+   - If file/directory uses Japanese comments → use Japanese
+   - If file uses specific formatting → follow same format
+   - If file has particular section structure → maintain consistency
+
+3. **Exceptions:**
+   - Only deviate from existing style if issue explicitly requires it
+   - Explain deviation reason to user if necessary
+
+## Examples
+
+### Good: Matching existing style
+```go
+// Existing file has English comments
+func foo() error {
+    // existing comment
+}
+
+// Your addition - also in English
+func bar() error {
+    // process items
+}
+```
+
+### Bad: Not matching existing style
+```go
+// Existing file has English comments
+func foo() error {
+    // existing comment
+}
+
+// Your addition - in Japanese (inconsistent!)
+func bar() error {
+    // アイテムを処理
+}
+```
 
 ## Notes
 
