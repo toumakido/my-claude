@@ -6,19 +6,23 @@ Output language: Japanese, formal business tone
 
 - gh CLI installed and authenticated
 - $ARGUMENTS: PR number (123) or URL
-- Run from repo root
+- Run from repository root
 
 ## Process
 
-1. Fetch PR information: `gh pr view $ARGUMENTS`
-2. Fetch PR diff: `gh pr diff $ARGUMENTS`
-3. Analyze the changes using Task tool (subagent_type=general-purpose) with focus on:
-   - Code quality and design (naming conventions, function responsibilities, readability)
-   - Security risks (vulnerabilities, secret leaks, OWASP top 10)
-   - Performance (processing speed, memory usage, inefficient implementations)
-   - Test adequacy (coverage, test case appropriateness)
-4. Provide essential context for human reviewers
-5. Output comprehensive review report in Markdown format
+1. Fetch PR information in parallel (independent):
+   - PR metadata: `gh pr view $ARGUMENTS`
+   - PR diff: `gh pr diff $ARGUMENTS`
+2. Analyze the changes using Task tool (subagent_type=general-purpose):
+   - Provide both PR metadata and diff as context to the agent
+   - Agent should analyze: code quality, security risks, performance, test adequacy
+   - Agent should output structured findings with file:line references
+3. Transform agent findings into human reviewer context:
+   - Summarize architectural changes and design decisions
+   - Highlight security risks with specific remediation steps
+   - Note performance concerns with impact assessment
+   - Identify missing test coverage
+4. Output comprehensive review report in Markdown format
 
 ## Output Format
 

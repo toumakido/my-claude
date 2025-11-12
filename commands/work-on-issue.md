@@ -6,28 +6,33 @@ Output language: Japanese, formal business tone
 
 - gh CLI installed and authenticated
 - $ARGUMENTS: issue number (123) or URL
-- Run from repo root
+- Run from repository root
 
 ## Process
 
-1. Fetch issue: `gh issue view $ARGUMENTS`
-2. Create TodoWrite plan: issue review, analysis, find files, implement, test, commit, create PR
+1. Create TodoWrite plan: issue review, analysis, find files, implement, test, commit, create PR
+2. Fetch issue and create branch in parallel (independent):
+   - Fetch issue: `gh issue view $ARGUMENTS`
+   - Create branch: `git checkout -b fix/issue-$ISSUE_NUMBER`
 3. Analyze problem, confirm understanding with user via AskUserQuestion, propose fix approach
-4. Create branch: `git checkout -b fix/issue-$ISSUE_NUMBER`
-5. Find related files using Task tool (subagent_type=Explore)
-6. Implement fix with Edit tool following "File Edit Guidelines" section below, avoid security issues (XSS, SQL injection), mark todos complete
-7. Run tests (unit, integration, e2e), add new tests if needed
-8. Commit with format:
-```
+4. Find related files using Task tool (subagent_type=Explore)
+5. Implement fix with Edit tool following "File Edit Guidelines" section below, avoid security issues (XSS, SQL injection), mark todos complete
+6. Run tests (unit, integration, e2e), add new tests if needed
+7. Commit changes sequentially (do not commit until all fixes complete):
+```bash
+git add <changed-files>
+git commit -m "$(cat <<'EOF'
 fix: <brief> (#$ISSUE_NUMBER)
 
 - details
 - scope
 
 Fixes #$ISSUE_NUMBER
+EOF
+)"
 ```
-9. Create PR with `gh pr create`, include: problem summary, fix details, test method, screenshots (if UI), Fixes #$ISSUE_NUMBER
-10. Output only: `https://github.com/user/repo/pull/123`
+8. Create PR with `gh pr create`, include: problem summary, fix details, test method, screenshots (if UI), Fixes #$ISSUE_NUMBER
+9. Output PR URL: `https://github.com/user/repo/pull/123`
 
 ## Error Handling
 
