@@ -16,6 +16,9 @@ Efficiently investigate and answer questions about structured GitHub issues with
 ## Process
 
 1. Parse arguments: extract issue number and user prompt
+   - Split `$ARGUMENTS` by first space: `issue_number = first_token`, `user_prompt = remaining_text`
+   - Example: `"123 この問題の原因を調査して"` → issue_number=`"123"`, user_prompt=`"この問題の原因を調査して"`
+   - If no space found: treat entire `$ARGUMENTS` as issue_number, prompt user for question
 2. Fetch issue: `gh issue view <issue_number> --json title,body,labels,comments`
 3. Parse structured issue content:
    - Bug: 概要、再現手順、期待される動作、実際の動作、エラーメッセージ、環境情報

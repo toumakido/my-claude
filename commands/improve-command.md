@@ -28,16 +28,17 @@ Output language: Japanese, formal business tone
    - Check if `commands/<command-name>.md` exists
    - Read and understand command specification
 2. Analyze conversation history:
-   - Identify when target command was executed
+   - Identify when target command was executed (search for `/command-name` in conversation)
    - Extract problems encountered during/after execution
    - Identify missing patterns or guidance
    - Note additional steps required beyond command specification
    - Find workarounds or fixes applied
 3. Analyze improvement opportunities from conversation history:
-   - User corrections or指摘 (e.g., "周りのフォーマットに合わせて")
-   - Multiple Edit rejections indicating unclear requirements
-   - Workarounds or manual interventions required
-   - Additional questions needed during execution
+   - User corrections or指摘 (e.g., "周りのフォーマットに合わせて") - indicates missing style guidelines
+   - Multiple Edit rejections indicating unclear requirements - count rejections with same file
+   - Workarounds or manual interventions required - user ran commands directly
+   - Additional questions needed during execution - count AskUserQuestion tool calls during command execution
+   - Post-command fixes by user - commits/edits after command completion
 
    Optional (only if needed for reference):
    - Get PR number for reference: `gh pr list --limit 5`

@@ -6,7 +6,7 @@ Output language: Japanese, formal business tone
 
 - gh CLI installed and authenticated
 - $ARGUMENTS: PR number
-- Run from repo root
+- Run from repository root
 
 ## Process
 
@@ -31,24 +31,35 @@ Output language: Japanese, formal business tone
 ## 動作確認方法
 
 ### 前提条件
-- [server startup command]
-- [environment variables]
-- [database initialization]
-- [test data setup]
+- サーバー起動: `go run cmd/server/main.go` or `npm start` or specific command from README
+- 環境変数: `export API_KEY=xxx` or `.env` file setup
+- DB初期化: `go run cmd/migrate/main.go` or `npm run migrate`
+- テストデータ: `go run cmd/seed/main.go` or SQL insert scripts
 
 ### APIエンドポイント確認
 
-#### [METHOD] [PATH] - [Description]
+#### GET /api/users/{id} - ユーザー情報取得
 ```bash
-curl -X [METHOD] [URL] \
+curl -X GET http://localhost:8080/api/users/123 \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer ${TOKEN}" \
-  -d '[REQUEST_BODY]'
+  -H "Authorization: Bearer ${TOKEN}"
 ```
 
 **期待されるレスポンス**:
-- Status: [CODE]
-- Body: `[RESPONSE_EXAMPLE]`
+- Status: 200
+- Body: `{"id": "123", "name": "John Doe", "email": "john@example.com"}`
+
+#### POST /api/users - ユーザー作成
+```bash
+curl -X POST http://localhost:8080/api/users \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -d '{"name": "Jane Doe", "email": "jane@example.com"}'
+```
+
+**期待されるレスポンス**:
+- Status: 201
+- Body: `{"id": "456", "name": "Jane Doe", "email": "jane@example.com"}`
 
 [Repeat for each endpoint]
 ```

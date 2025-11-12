@@ -18,9 +18,11 @@ Output language: Japanese, formal business tone
 2. Identify optimization opportunities based on check criteria
 3. If no optimizations found: report that files are already optimal and exit (do not create PR)
 4. If optimizations found: apply using Edit tool
-5. Create branch: `optimize/ai-efficiency-YYYYMMDD`
-6. Commit with summary
-7. Create PR: `gh pr create --repo toumakido/my-claude`
+5. Create branch: `optimize/ai-efficiency-YYYYMMDD` using `git checkout -b`
+6. Commit changes sequentially:
+   - Stage files: `git add commands/*.md CLAUDE.md`
+   - Create commit with format specified in CLAUDE.md (no emoji suffixes)
+7. Create PR: `gh pr create --repo toumakido/my-claude --title "optimize: AI efficiency improvements (YYYYMMDD)"`
 8. Display PR URL and summary
 
 ## Check Criteria
