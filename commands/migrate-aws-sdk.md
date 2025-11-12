@@ -27,25 +27,63 @@ Output language: Japanese, formal business tone
    - Setter methods → direct field assignment
    - Marshal/Unmarshal package changes
    - Error handling
-4. Execute automatic migration for each file:
-   - Update import statements
-   - Replace session initialization with config.LoadDefaultConfig
-   - Update service client creation
-   - Add context parameters in this order:
-     1. Handler layer functions/methods (process all handler patterns first)
-     2. Helper functions that call AWS SDK (top-level functions without receiver)
-     3. Repository/Service methods
-     4. Update all call sites for modified functions/methods
+3.5. **Design context propagation flow (CRITICAL - prevents context.TODO() usage):**
+   - **Identify context initialization points** (where to use context.Background()):
+     * `func init()` - application initialization
+     * `func main()` - application entry point
+     * `func NewXxx()` - constructor functions calling config.LoadDefaultConfig
+   - **Identify context entry points** (where context enters from external source):
+     * Echo handlers: receive from `c.Request().Context()`
+     * Lambda handlers: receive from `func handler(ctx context.Context, event XXX)` parameter
+   - **Map complete context propagation chain:**
+     * Entry point (handler) → Service/Execute* methods → Repository methods → AWS SDK calls
+     * Identify all functions requiring ctx parameter addition
+   - **Create explicit TodoWrite tasks** (see "Context Usage Guidelines" section for patterns):
+     * "PHASE 1: Initialize config with context.Background() in init/main/NewXxx"
+     * "PHASE 2: Extract context in handlers (Echo/Lambda)"
+     * "PHASE 3: Add ctx parameter to Execute*/Process* methods"
+     * "PHASE 4: Add ctx parameter to Repository/insert* methods"
+     * "PHASE 5: Update all call sites to propagate context"
+   - **This design step prevents context.TODO() by ensuring context source is clear before implementation**
+4. Execute automatic migration in **TOP-DOWN order** (never bottom-up):
 
-     Apply context handling rules:
-     * Client initialization (init/main/NewXxx functions): use context.Background()
-     * Handler layer (Echo): obtain context with `ctx := c.Request().Context()`, pass to downstream
-     * Handler layer (Lambda): use handler's ctx parameter directly, pass to helper functions
-     * Helper functions: add `ctx context.Context` as first parameter, receive from caller
-     * Repository/Service methods: add `ctx context.Context` as first parameter after receiver, propagate from caller
-     * Never use context.TODO() in production code (tests only)
-     * Store clients in struct fields (dependency injection), never reinitialize per method call
+   **PHASE 1: Context initialization (entry points - use context.Background())**
+   - main.go: Replace session with `config.LoadDefaultConfig(context.Background())`
+   - init functions: Initialize clients with context.Background()
+   - NewXxx constructors: Use context.Background() for config loading
+   - Store clients in struct fields (dependency injection pattern)
+   - Update import statements to v2
+
+   **PHASE 2: Context receipt (handler layer - obtain from framework/runtime)**
+   - Echo handlers: Add `ctx := c.Request().Context()` at top of handler methods
+   - Lambda handlers: Use existing `ctx` parameter from function signature
+   - Verify context is obtained, not created
+
+   **PHASE 3: Context propagation (Service/Execute*/Process* layer)**
+   - Add `ctx context.Context` as first parameter to all Execute*/Process* methods
+   - Update method interfaces to include context parameter
+   - Pass ctx to downstream Repository calls
+   - Update all call sites in handler layer
+
+   **PHASE 4: Context propagation (Repository/Helper layer)**
+   - Repository methods: Add `ctx context.Context` as first parameter after receiver
+   - Helper functions: Add `ctx context.Context` as first parameter (before other params)
+   - Pass ctx to all AWS SDK calls: `client.Method(ctx, input)`
+   - Update Repository interfaces
+
+   **PHASE 5: Verify context flow and update remaining call sites**
+   - Trace context flow: init/main → handler → service → repository → AWS API
+   - Update all remaining function call sites to pass ctx
+   - Verify no context.TODO() exists in production code
    - Update interfaces to include context.Context parameters
+
+   **Additional migration tasks (can be done in parallel with PHASE 1-5):**
+   - Update service client creation patterns (session.New → NewFromConfig)
+   - Migrate pagination patterns (ScanPages → Paginator)
+   - Update expression parameter types (remove pointers from ExpressionAttributeNames)
+   - Fix enum type comparisons (remove pointer dereference)
+   - Replace setter methods with direct field assignment
+   - Update Marshal/Unmarshal package imports
    - Preserve existing logic and error handling
 5. Update go.mod dependencies:
    - Add v2 dependencies: `go get github.com/aws/aws-sdk-go-v2/config`
@@ -57,51 +95,71 @@ Output language: Japanese, formal business tone
      - Run `go mod tidy` in each submodule
      - Run `go build` in each submodule to verify
 6. Verify compilation and context usage:
-   - Root directory: `go build ./...`
-   - Each submodule: `go build .`
-   - Run tests if available: `go test ./...`
-   - Check for inappropriate context usage:
-     * `grep -r "context\.TODO()\|context\.Background()" --include="*.go" | grep -v "func init\|func main\|func New" | grep -v "_test\.go" | grep -v "^[[:space:]]*//"`
-     * Look for helper functions missing ctx parameter: `grep -r "^func [a-z]" --include="*.go" | grep -v "_test\.go"` and verify each has ctx parameter
-     * Verify all AWS SDK calls receive context as first parameter
-   - For Lambda functions: verify context propagation from handler to all helper functions and AWS API calls
-   - For Echo handlers: verify `ctx := c.Request().Context()` at top of handler methods
-   - Verify no type errors (especially enum types, types.X usage)
+   - **Build verification:**
+     * Root directory: `go build ./...`
+     * Each submodule: `go build .`
+     * Run tests if available: `go test ./...`
+   - **Context flow verification (follow PHASE order):**
+     * PHASE 1: Verify context.Background() only in init/main/NewXxx functions
+     * PHASE 2: Verify handlers obtain context (not create):
+       - Echo: `ctx := c.Request().Context()` at top of handler methods
+       - Lambda: handler signature has `ctx context.Context` parameter
+     * PHASE 3-4: Verify all Execute*/Process*/Repository/Helper functions have ctx parameter
+     * PHASE 5: Verify context propagation through entire call chain
+   - **Detect inappropriate context usage:**
+     * Search for context.TODO() in production code (excluding tests):
+       ```
+       grep -r "context\.TODO()" --include="*.go" | grep -v "_test\.go" | grep -v "^[[:space:]]*//"`
+       ```
+     * Search for context.Background() outside initialization:
+       ```
+       grep -r "context\.Background()" --include="*.go" | grep -v "func init\|func main\|func New" | grep -v "_test\.go" | grep -v "^[[:space:]]*//"`
+       ```
+     * Verify helper functions have ctx parameter:
+       ```
+       grep -r "^func [a-z]" --include="*.go" | grep -v "_test\.go"`
+       ```
+   - **AWS SDK call verification:**
+     * All AWS SDK calls must have context as first parameter: `client.Method(ctx, input)`
+     * Verify client initialization happens in PHASE 1 (not in methods)
+   - **Type verification:**
+     * Verify enum types use types.X constants (not *string)
+     * Verify expression parameters use correct types (map[string]string, not map[string]*string)
 7. Report migration summary with file count and changes
 
 ## Migration Patterns
 
-### Session → Config
+### Session → Config (Phase 1)
 ```go
 // v1
 sess := session.Must(session.NewSession())
 
-// v2 (in init/main/New* functions)
+// v2 - Phase 1: Use context.Background() only in init/main/NewXxx
 cfg, err := config.LoadDefaultConfig(context.Background())
 if err != nil {
     // handle error
 }
 ```
 
-### Service Client Initialization
+### Service Client Initialization (Phase 1)
 ```go
 // v1
 svc := s3.New(sess)
 
-// v2
+// v2 - Phase 1: Initialize clients once, store in struct
 svc := s3.NewFromConfig(cfg)
 ```
 
-### API Calls with Context
+### API Calls with Context (Phase 5)
 ```go
 // v1
 result, err := svc.GetObject(&s3.GetObjectInput{...})
 
-// v2 (use context from caller)
+// v2 - Phase 5: Pass context from caller to AWS SDK
 result, err := svc.GetObject(ctx, &s3.GetObjectInput{...})
 ```
 
-### Context Propagation in Repository/Service Layer
+### Context Propagation in Repository/Service Layer (Phase 3-4)
 ```go
 // v1
 func (repo *Repo) Put(item Item) error {
@@ -109,17 +167,23 @@ func (repo *Repo) Put(item Item) error {
     return err
 }
 
-// v2 - avoid creating context.Background() in non-entry points
+// v2 - Phase 4: Add ctx parameter, receive from caller
 func (repo *Repo) Put(ctx context.Context, item Item) error {
-    _, err := repo.dynamo.PutItem(ctx, &dynamodb.PutItemInput{...})
+    _, err := repo.dynamo.PutItem(ctx, &dynamodb.PutItemInput{...})  // Phase 5: Pass to AWS SDK
     return err
 }
 
-// Interface update required
+// Phase 4: Interface update required
 type Repository interface {
     Put(context.Context, Item) error
 }
 ```
+
+**Key principle: Context flows TOP-DOWN**
+- Phase 1: Create at entry (init/main/NewXxx)
+- Phase 2: Receive from framework/runtime (handler)
+- Phase 3-4: Propagate through layers (service → repository)
+- Phase 5: Pass to AWS SDK
 
 ### Import Paths
 ```go
@@ -723,47 +787,73 @@ sesClient := sesv2.NewFromConfig(cfg)
 
 ## Context Usage Guidelines
 
-Apply phases in order to ensure proper context initialization and propagation:
+**CRITICAL: Apply phases in TOP-DOWN order. This prevents context.TODO() usage by ensuring context source is clear before implementation.**
 
-### Phase 1: Identify context initialization points (use context.Background())
+### Phase 1: Context initialization (use context.Background())
 Functions that create new contexts from scratch:
 - `func init()` - application initialization
 - `func main()` - application entry point
-- `func NewXxx()` - when calling config.LoadDefaultConfig
-- Never initialize context inside Repository/Service/Helper functions
+- `func NewXxx()` - constructor functions when calling config.LoadDefaultConfig
+- **Rule**: Never initialize context inside Repository/Service/Helper functions
 
-### Phase 2: Identify context entry points (where context enters the call chain)
+### Phase 2: Context receipt (obtain from framework/runtime)
 Functions that receive context from external sources:
 - **Echo handler**: `ctx := c.Request().Context()` at the top of handler method
 - **Lambda handler**: `ctx` parameter from function signature `func handler(ctx context.Context, event XXX)`
+- **Rule**: Handlers obtain context, not create it
 
-### Phase 3: Add context propagation (add ctx parameter, receive from caller)
+### Phase 3: Context propagation - Service/Execute*/Process* layer
 Functions that pass context through the call chain:
-- **Helper functions** (top-level functions in main.go hierarchy): add `ctx context.Context` as first parameter
-- **Repository methods**: add `ctx context.Context` as first parameter after receiver
 - **Service methods**: add `ctx context.Context` as first parameter after receiver
+- **Execute*/Process* methods**: add `ctx context.Context` as first parameter after receiver
+- **Rule**: Receive ctx from handler layer, pass to Repository layer
 
-### Phase 4: Pass context to all downstream calls
-All AWS SDK calls and function calls must receive context:
-- AWS SDK calls: `client.Method(ctx, input)`
-- Function/method calls: `functionName(ctx, ...)`
+### Phase 4: Context propagation - Repository/Helper layer
+Lower-level functions that call AWS SDK:
+- **Repository methods**: add `ctx context.Context` as first parameter after receiver
+- **Helper functions** (top-level functions without receiver): add `ctx context.Context` as first parameter
+- **Rule**: Receive ctx from caller, pass to AWS SDK calls
 
-### Pattern matching rules (apply in order)
-1. `func init()` or `func main()` → use `context.Background()`
-2. `func NewRepository()` or `func NewService()` or `func NewHandler()` → use `context.Background()` for config.LoadDefaultConfig
-3. Handler layer patterns:
-   - `func (h *Handler) Method(c echo.Context)` → add `ctx := c.Request().Context()` at top, pass ctx to downstream
-   - `func handler(ctx context.Context, event XXXEvent)` → pass ctx to all helper functions and AWS SDK calls
-4. Helper functions (top-level functions calling AWS SDK):
-   - `func processXXX(...)` → add `ctx context.Context` as first param, update all call sites
-5. `func (r *Repository) Method(...)` or `func (s *Service) Method(...)` → add `ctx context.Context` as first param after receiver
-6. Inside `*_test.go` → `context.TODO()` or `context.Background()` acceptable
-7. Type name matches `*Fake*`, `*Mock*`, `*Stub*` → `context.TODO()` or `context.Background()` acceptable
+### Phase 5: Update all call sites and verify flow
+Ensure complete context propagation:
+- **AWS SDK calls**: `client.Method(ctx, input)` - context as first parameter
+- **Function calls**: `functionName(ctx, ...)` - propagate ctx to all calls
+- **Verification**: Trace flow from init/main → handler → service → repository → AWS API
+- **Rule**: No context.TODO() in production code (tests only)
 
-Examples:
+### Pattern matching rules (apply in PHASE order)
+
+**Phase 1 patterns (Context initialization):**
+1. `func init()` → use `context.Background()`
+2. `func main()` → use `context.Background()`
+3. `func NewXxx()` (constructor) → use `context.Background()` for config.LoadDefaultConfig only
+
+**Phase 2 patterns (Context receipt):**
+4. `func (h *Handler) Method(c echo.Context)` → add `ctx := c.Request().Context()` at top
+5. `func handler(ctx context.Context, event XXXEvent)` (Lambda) → use existing ctx parameter
+
+**Phase 3 patterns (Service/Execute*/Process* layer):**
+6. `func (s *Service) Method(...)` → add `ctx context.Context` as first param after receiver
+7. `func (s *Service) Execute*(...)` → add `ctx context.Context` as first param after receiver
+8. `func (s *Service) Process*(...)` → add `ctx context.Context` as first param after receiver
+
+**Phase 4 patterns (Repository/Helper layer):**
+9. `func (r *Repository) Method(...)` → add `ctx context.Context` as first param after receiver
+10. `func processXXX(...)` (helper function, no receiver) → add `ctx context.Context` as first param
+11. `func insert*(...)` (helper function) → add `ctx context.Context` as first param
+
+**Test/Mock exceptions:**
+12. Inside `*_test.go` → `context.TODO()` or `context.Background()` acceptable
+13. Type name matches `*Fake*`, `*Mock*`, `*Stub*` → `context.TODO()` or `context.Background()` acceptable
+
+### Examples (organized by PHASE)
 
 ```go
-// Pattern 1: Client initialization in constructor
+// ============================================================
+// Phase 1: Context initialization (use context.Background())
+// ============================================================
+
+// Correct: Client initialization in constructor
 func NewRepository() (*Repository, error) {
     cfg, err := config.LoadDefaultConfig(context.Background())
     if err != nil {
@@ -774,79 +864,100 @@ func NewRepository() (*Repository, error) {
     }, nil
 }
 
-// Pattern 3: Repository method with context propagation
-func (r *Repository) Get(ctx context.Context, id string) error {
-    _, err := r.dynamoClient.GetItem(ctx, &dynamodb.GetItemInput{...})
-    return err
-}
-
-// Pattern 3: Service method propagating context
-func (s *Service) Process(ctx context.Context, id string) error {
-    return s.repo.Get(ctx, id)
-}
-
-// Wrong: Reinitializing client in method (violates rule 1)
+// Wrong: Reinitializing client in method (violates Phase 1 rule)
 func (r *Repository) Get(ctx context.Context, id string) error {
     cfg, _ := config.LoadDefaultConfig(context.Background())
     client := dynamodb.NewFromConfig(cfg)  // DO NOT DO THIS
     return nil
 }
 
-// Pattern 4: Helper function in main.go hierarchy (Lambda example)
-// Before migration
-func processRecord(bucket, key string) error {
-    _, err := dynamoClient.PutItem(&dynamodb.PutItemInput{...})
-    return err
+// ============================================================
+// Phase 2: Context receipt (obtain from framework/runtime)
+// ============================================================
+
+// Echo handler - obtain context from framework
+func (h *Handler) GetItem(c echo.Context) error {
+    ctx := c.Request().Context()  // Phase 2: Obtain context
+
+    result, err := h.service.Process(ctx, id)  // Phase 3: Pass to service
+    // ...
 }
 
+// Lambda handler - use existing ctx parameter
 func handler(ctx context.Context, event events.S3Event) error {
     for _, record := range event.Records {
-        if err := processRecord(record.S3.Bucket.Name, record.S3.Object.Key); err != nil {
-            return err
-        }
-    }
-    return nil
-}
-
-// After migration - add ctx parameter to helper function and pass from handler
-func processRecord(ctx context.Context, bucket, key string) error {
-    _, err := dynamoClient.PutItem(ctx, &dynamodb.PutItemInput{...})
-    return err
-}
-
-func handler(ctx context.Context, event events.S3Event) error {
-    for _, record := range event.Records {
+        // Phase 4: Pass ctx to helper function
         if err := processRecord(ctx, record.S3.Bucket.Name, record.S3.Object.Key); err != nil {
             return err
         }
     }
     return nil
+}
+
+// ============================================================
+// Phase 3: Service/Execute*/Process* layer
+// ============================================================
+
+// Service method - receive ctx from handler, pass to repository
+func (s *Service) Process(ctx context.Context, id string) error {
+    return s.repo.Get(ctx, id)  // Phase 4: Pass to repository
+}
+
+// Execute* pattern
+func (s *Service) ExecuteTask(ctx context.Context, taskID string) error {
+    return s.repo.UpdateTask(ctx, taskID)  // Phase 4: Pass to repository
+}
+
+// ============================================================
+// Phase 4: Repository/Helper layer
+// ============================================================
+
+// Repository method - receive ctx from service, pass to AWS SDK
+func (r *Repository) Get(ctx context.Context, id string) error {
+    _, err := r.dynamoClient.GetItem(ctx, &dynamodb.GetItemInput{...})  // Phase 5: AWS SDK call
+    return err
+}
+
+// Helper function - receive ctx from caller, pass to AWS SDK
+func processRecord(ctx context.Context, bucket, key string) error {
+    _, err := dynamoClient.PutItem(ctx, &dynamodb.PutItemInput{...})  // Phase 5: AWS SDK call
+    return err
 }
 ```
 
 ## Web Framework Integration
 
-### Echo Framework
+### Echo Framework (Phase 2 pattern)
+
+Echo handlers obtain context from the framework:
 
 ```go
-// Obtain context from Echo in handler layer
+// Phase 2: Obtain context from Echo
 func (h *Handler) GetItem(c echo.Context) error {
-    ctx := c.Request().Context()
+    ctx := c.Request().Context()  // Obtain from framework
 
-    // Pass to repository/service layer
-    result, err := h.repository.GetItem(ctx, id)
-    // ...
+    // Phase 3: Pass to service layer
+    result, err := h.service.GetItem(ctx, id)
+    if err != nil {
+        return err
+    }
+    return c.JSON(200, result)
 }
 ```
 
+**Key points:**
+- Always use `c.Request().Context()` at the top of handler method
+- Never create new context with `context.Background()` or `context.TODO()`
+- Pass ctx to all downstream service/repository calls
+
 ## Lambda Functions
 
-### Context Propagation
+### Context Propagation (Phase 2 → Phase 4 pattern)
 
-Lambda functions must propagate context from handler to all AWS API calls.
+Lambda functions receive context from AWS Lambda runtime and must propagate it to all downstream calls:
 
 ```go
-// v1
+// v1 - No context propagation
 func handler(ctx context.Context, event events.S3Event) error {
     for _, record := range event.Records {
         if err := processRecord(record.S3.Bucket.Name, record.S3.Object.Key); err != nil {
@@ -861,9 +972,10 @@ func processRecord(bucket, key string) error {
     return err
 }
 
-// v2
-func handler(ctx context.Context, event events.S3Event) error {
+// v2 - Proper context propagation
+func handler(ctx context.Context, event events.S3Event) error {  // Phase 2: Receive from runtime
     for _, record := range event.Records {
+        // Phase 4: Pass to helper function
         if err := processRecord(ctx, record.S3.Bucket.Name, record.S3.Object.Key); err != nil {
             return err
         }
@@ -871,17 +983,21 @@ func handler(ctx context.Context, event events.S3Event) error {
     return nil
 }
 
-func processRecord(ctx context.Context, bucket, key string) error {
-    _, err := dynamoClient.PutItem(ctx, &dynamodb.PutItemInput{...})
+func processRecord(ctx context.Context, bucket, key string) error {  // Phase 4: Add ctx parameter
+    _, err := dynamoClient.PutItem(ctx, &dynamodb.PutItemInput{...})  // Phase 5: Pass to AWS SDK
     return err
 }
 ```
 
-Never use `context.TODO()` or `context.Background()` in Lambda functions. Always propagate the context from handler to enable proper timeout handling, X-Ray tracing, and cancellation signal propagation.
+**Critical rules:**
+- Lambda handler receives `ctx` from AWS Lambda runtime (Phase 2)
+- Never use `context.TODO()` or `context.Background()` in Lambda functions
+- Propagate handler's ctx to all helper functions (Phase 4)
+- Enables timeout handling, X-Ray tracing, and cancellation propagation
 
-### Config Initialization in init()
+### Config Initialization in init() (Phase 1 pattern)
 
-For global client variables, use init function for config initialization.
+For global client variables in Lambda functions, use init() for config initialization:
 
 ```go
 // v1
@@ -904,9 +1020,9 @@ var (
     ecsClient    *ecs.Client
 )
 
-func init() {
+func init() {  // Phase 1: Context initialization
     cfg, err := config.LoadDefaultConfig(
-        context.Background(),
+        context.Background(),  // Phase 1: Use Background only here
         config.WithRegion("ap-northeast-1"),
     )
     if err != nil {
@@ -917,12 +1033,20 @@ func init() {
 }
 ```
 
-Use `context.Background()` in init function (entry point), but use caller's context for actual API calls.
+**Key points:**
+- Phase 1: Use `context.Background()` in init() for config loading only
+- Phase 2-5: Use handler's ctx for all API calls
+- Store clients in global variables (Lambda container reuse)
 
 ## Notes
 
-- Backup or commit before running migration
+- **Backup or commit before running migration**
+- **CRITICAL: Follow TOP-DOWN migration order (Phase 1 → Phase 5)**
+  - Never start from bottom (Repository/insert* layer) - leads to context.TODO() usage
+  - Always design context flow before implementation (step 3.5)
+  - Use TodoWrite to track Phase progress
+- **Context flow principle: init/main → handler → service → repository → AWS SDK**
 - Test thoroughly after migration - some APIs have behavioral changes
 - Check AWS SDK Go v2 migration guide for service-specific changes
 - Update unit tests to match new patterns
-- Follow Context Usage Guidelines: use context.Background() for initialization, propagate caller's context for API calls
+- Verify no context.TODO() in production code after migration
