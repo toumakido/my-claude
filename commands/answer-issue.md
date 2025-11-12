@@ -49,13 +49,11 @@ Efficiently investigate and answer questions about structured GitHub issues with
 
 ## Efficiency Guidelines
 
-- **DO NOT** implement fixes unless explicitly requested
-- **DO** use Task tool for codebase exploration (avoid direct Grep/Glob for open-ended searches)
-- **DO** provide file:line references for easy navigation
-- **DO** focus on answering the specific prompt efficiently
-- **DO NOT** run unnecessary tests or build commands
-- **DO** read only relevant files (use context from structured issue)
-- **DO** leverage structured issue format to narrow search scope
+- Investigate and answer only (do not implement fixes unless explicitly requested)
+- Use Task tool with subagent_type=Explore for codebase exploration (NOT direct Grep/Glob for open-ended searches)
+- Provide file:line references for easy navigation
+- Read only relevant files (leverage structured issue context to narrow scope)
+- Do not run unnecessary tests or build commands
 
 ## Example Scenarios
 
@@ -101,8 +99,6 @@ Always structure response as:
 
 ## Notes
 
-- Optimize for speed: don't over-investigate
-- Trust structured issue format: it contains key information
-- Use Task (Explore) for codebase searches, not direct tools
-- Provide actionable, specific answers with code references
-- Stay focused on user's prompt, don't diverge into implementation unless asked
+- Optimize for speed (do not over-investigate)
+- Provide actionable answers with file:line references
+- Stay focused on user's prompt (do not implement unless asked)

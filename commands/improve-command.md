@@ -49,25 +49,10 @@ Output language: Japanese, formal business tone
    - Additional checks needed
    - Service/library-specific knowledge gaps
    - More efficient approaches
-4.5. Evaluate and confirm with user:
-   - Assess severity:
-     - Critical/Important: コマンド仕様の明確な不足、複数回の指摘
-     - Nice-to-have: 軽微な改善、1回のみの指摘
-     - None: 改善点が見当たらない
-
-   - If Nice-to-have or None:
-     - Present analysis summary to user:
-       ```
-       分析結果:
-       - 会話履歴を確認: [検出内容]
-       - 評価: [Critical/Important/Nice-to-have/None]
-
-       issue作成を続けますか？
-       ```
-     - Use AskUserQuestion to confirm
-     - If user declines: Stop and display "中断しました"
-
-   - If Critical/Important: Proceed to issue creation
+4.5. Evaluate severity and confirm with user:
+   - Severity levels:
+     - Critical/Important: コマンド仕様の明確な不足、複数回の指摘 → Proceed to issue creation
+     - Nice-to-have/None: 軽微な改善、1回のみの指摘、改善点なし → Use AskUserQuestion to confirm before proceeding
 5. Generate structured issue content (if confirmed):
    - Title: `<command-name>.md の改善提案: [主要な改善点の要約]`
    - Body sections:
