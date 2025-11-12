@@ -43,7 +43,8 @@ Output language: Japanese, formal business tone
    - Root directory: `go build ./...`
    - Each submodule: `go build .`
    - Run tests if available: `go test ./...`
-   - Check for inappropriate context.Background() usage: `grep -r "context.Background()" --include="*.go" | grep -v "func main\|func init\|_test.go"`
+   - Check for inappropriate context usage: `grep -r "context\.TODO()\|context\.Background()" --include="*.go" | grep -v "func init\|_test\.go" | grep -v "^[[:space:]]*//"`
+   - For Lambda functions: verify context propagation from handler to all AWS API calls
    - Verify no type errors (especially enum types, types.X usage)
 7. Report migration summary with file count and changes
 
@@ -263,6 +264,66 @@ MaxNumberOfMessages: aws.Int32(10)  // or just: 10
 MessageAttributeNames: []string{"UserID", "RPID"}
 ```
 
+### ECS
+
+#### RunTaskInput Type Changes
+```go
+// v1
+import (
+    "github.com/aws/aws-sdk-go/aws"
+    "github.com/aws/aws-sdk-go/service/ecs"
+)
+
+client := ecs.New(session)
+input := &ecs.RunTaskInput{
+    Cluster:        aws.String("cluster-name"),
+    Count:          aws.Int64(1),
+    TaskDefinition: aws.String("task-def"),
+    LaunchType:     aws.String(ecs.LaunchTypeFargate),
+    NetworkConfiguration: &ecs.NetworkConfiguration{
+        AwsvpcConfiguration: &ecs.AwsVpcConfiguration{
+            SecurityGroups: aws.StringSlice([]string{"sg-xxx"}),
+            Subnets:        aws.StringSlice([]string{"subnet-xxx"}),
+            AssignPublicIp: aws.String(ecs.AssignPublicIpDisabled),
+        },
+    },
+}
+
+// v2
+import (
+    "github.com/aws/aws-sdk-go-v2/aws"
+    "github.com/aws/aws-sdk-go-v2/config"
+    "github.com/aws/aws-sdk-go-v2/service/ecs"
+    ecstypes "github.com/aws/aws-sdk-go-v2/service/ecs/types"
+)
+
+cfg, err := config.LoadDefaultConfig(ctx)
+client := ecs.NewFromConfig(cfg)
+
+count := int32(1)
+input := &ecs.RunTaskInput{
+    Cluster:        aws.String("cluster-name"),
+    Count:          &count,  // *int32
+    TaskDefinition: aws.String("task-def"),
+    LaunchType:     ecstypes.LaunchTypeFargate,  // enum type
+    NetworkConfiguration: &ecstypes.NetworkConfiguration{
+        AwsvpcConfiguration: &ecstypes.AwsVpcConfiguration{
+            SecurityGroups: []string{"sg-xxx"},  // no pointer slice
+            Subnets:        []string{"subnet-xxx"},
+            AssignPublicIp: ecstypes.AssignPublicIpDisabled,  // enum type
+        },
+    },
+}
+
+_, err = client.RunTask(ctx, input)
+```
+
+Key changes:
+- `Count`: `*int64` → `*int32`
+- `LaunchType`: `*string` → `ecstypes.LaunchType` (enum)
+- `SecurityGroups`/`Subnets`: `[]*string` → `[]string`
+- `AssignPublicIp`: `*string` → `ecstypes.AssignPublicIp` (enum)
+
 ### DynamoDB
 ```go
 // v1
@@ -441,6 +502,86 @@ func (h *Handler) GetItem(c echo.Context) error {
     // ...
 }
 ```
+
+## Lambda Functions
+
+### Context Propagation
+
+Lambda functions must propagate context from handler to all AWS API calls.
+
+```go
+// v1
+func handler(ctx context.Context, event events.S3Event) error {
+    for _, record := range event.Records {
+        if err := processRecord(record.S3.Bucket.Name, record.S3.Object.Key); err != nil {
+            return err
+        }
+    }
+    return nil
+}
+
+func processRecord(bucket, key string) error {
+    _, err := dynamoClient.PutItem(&dynamodb.PutItemInput{...})
+    return err
+}
+
+// v2
+func handler(ctx context.Context, event events.S3Event) error {
+    for _, record := range event.Records {
+        if err := processRecord(ctx, record.S3.Bucket.Name, record.S3.Object.Key); err != nil {
+            return err
+        }
+    }
+    return nil
+}
+
+func processRecord(ctx context.Context, bucket, key string) error {
+    _, err := dynamoClient.PutItem(ctx, &dynamodb.PutItemInput{...})
+    return err
+}
+```
+
+Never use `context.TODO()` or `context.Background()` in Lambda functions. Always propagate the context from handler to enable proper timeout handling, X-Ray tracing, and cancellation signal propagation.
+
+### Config Initialization in init()
+
+For global client variables, use init function for config initialization.
+
+```go
+// v1
+var (
+    dynamoClient dynamodbiface.DynamoDBAPI
+    ecsClient    ecsiface.ECSAPI
+)
+
+func init() {
+    sess := session.Must(session.NewSession(
+        aws.NewConfig().WithRegion("ap-northeast-1"),
+    ))
+    dynamoClient = dynamodb.New(sess)
+    ecsClient = ecs.New(sess)
+}
+
+// v2
+var (
+    dynamoClient *dynamodb.Client
+    ecsClient    *ecs.Client
+)
+
+func init() {
+    cfg, err := config.LoadDefaultConfig(
+        context.TODO(),
+        config.WithRegion("ap-northeast-1"),
+    )
+    if err != nil {
+        log.Fatalf("unable to load SDK config, %v", err)
+    }
+    dynamoClient = dynamodb.NewFromConfig(cfg)
+    ecsClient = ecs.NewFromConfig(cfg)
+}
+```
+
+Use `context.TODO()` in init function, but use caller's context for actual API calls.
 
 ## Notes
 
