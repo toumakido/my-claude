@@ -10,6 +10,8 @@ Output language: Japanese, formal business tone
 
 ## Process
 
+**IMPORTANT: Do not add PHASE-related or migration procedure comments in source code. Only write comments that explain the implementation logic itself.**
+
 1. Search for aws-sdk-go-v1 usage: `grep -r "github.com/aws/aws-sdk-go" --include="*.go"`
 2. Create TodoWrite plan with all files to migrate and migration steps
 3. Analyze each file for migration patterns by scanning in this order:
