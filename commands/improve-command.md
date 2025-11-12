@@ -33,19 +33,42 @@ Output language: Japanese, formal business tone
    - Identify missing patterns or guidance
    - Note additional steps required beyond command specification
    - Find workarounds or fixes applied
-3. Analyze git history:
-   - Check if current repository is private: `gh repo view --json isPrivate`
-   - Get recent commits: `git log --oneline -10`
-   - Identify related PR: `gh pr list --limit 5`
-   - Extract actual implementation changes
-   - Identify follow-up commits that indicate command gaps
+3. Analyze improvement opportunities from conversation history:
+   - User corrections or指摘 (e.g., "周りのフォーマットに合わせて")
+   - Multiple Edit rejections indicating unclear requirements
+   - Workarounds or manual interventions required
+   - Additional questions needed during execution
+
+   Optional (only if needed for reference):
+   - Get PR number for reference: `gh pr list --limit 5`
+   - Check if repository is public: `gh repo view --json isPrivate`
+   - Note: Repository must be public to include PR links in issue
 4. Extract improvement opportunities:
    - Missing patterns or examples
    - Insufficient guidance or documentation
    - Additional checks needed
    - Service/library-specific knowledge gaps
    - More efficient approaches
-5. Generate structured issue content:
+4.5. Evaluate and confirm with user:
+   - Assess severity:
+     - Critical/Important: コマンド仕様の明確な不足、複数回の指摘
+     - Nice-to-have: 軽微な改善、1回のみの指摘
+     - None: 改善点が見当たらない
+
+   - If Nice-to-have or None:
+     - Present analysis summary to user:
+       ```
+       分析結果:
+       - 会話履歴を確認: [検出内容]
+       - 評価: [Critical/Important/Nice-to-have/None]
+
+       issue作成を続けますか？
+       ```
+     - Use AskUserQuestion to confirm
+     - If user declines: Stop and display "中断しました"
+
+   - If Critical/Important: Proceed to issue creation
+5. Generate structured issue content (if confirmed):
    - Title: `<command-name>.md の改善提案: [主要な改善点の要約]`
    - Body sections:
      - 概要: Brief summary of improvements
