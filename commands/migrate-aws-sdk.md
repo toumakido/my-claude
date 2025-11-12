@@ -27,7 +27,11 @@ Output language: Japanese, formal business tone
    - Update import statements
    - Replace session initialization with config.LoadDefaultConfig
    - Update service client creation
-   - Add context parameters to API calls (propagate from caller, avoid context.Background() in non-entry points)
+   - Add context parameters to API calls using these rules:
+     * Client initialization (init/main/NewXxx functions): use context.Background()
+     * Repository/Service methods: add ctx context.Context parameter, propagate from caller
+     * Never use context.TODO() in production code (tests only)
+     * Store clients in struct fields (dependency injection), never reinitialize per method call
    - Update interfaces to include context.Context parameters
    - Preserve existing logic and error handling
 5. Update go.mod dependencies:
@@ -55,8 +59,8 @@ Output language: Japanese, formal business tone
 // v1
 sess := session.Must(session.NewSession())
 
-// v2
-cfg, err := config.LoadDefaultConfig(context.TODO())
+// v2 (in init/main/New* functions)
+cfg, err := config.LoadDefaultConfig(context.Background())
 if err != nil {
     // handle error
 }
@@ -76,8 +80,8 @@ svc := s3.NewFromConfig(cfg)
 // v1
 result, err := svc.GetObject(&s3.GetObjectInput{...})
 
-// v2
-result, err := svc.GetObject(context.TODO(), &s3.GetObjectInput{...})
+// v2 (use context from caller)
+result, err := svc.GetObject(ctx, &s3.GetObjectInput{...})
 ```
 
 ### Context Propagation in Repository/Service Layer
@@ -462,29 +466,63 @@ sesClient := sesv2.NewFromConfig(cfg)
 
 ## Context Usage Guidelines
 
-- **handler/controller layer**: Obtain context from web framework
-- **usecase/service layer**: Receive as parameter, pass to lower layers
-- **repository/infrastructure layer**: Receive as parameter, use for AWS API calls
-- **test/fake implementations**: Use `context.TODO()` or `context.Background()`
-- **main function/initialization**: Use `context.Background()` or `context.TODO()`
+Apply rules in order:
+
+1. **Client initialization pattern** (config.LoadDefaultConfig call):
+   - If function name is `init` or `main` or starts with `New`: use `context.Background()`
+   - Store resulting client in struct field (never initialize client inside Repository/Service methods)
+
+2. **Test/fake code** (file ends with `_test.go` or type name contains `Fake`/`Mock`/`Stub`):
+   - Use `context.TODO()` or `context.Background()`
+
+3. **Production Repository/Service/Handler methods**:
+   - Add `ctx context.Context` as first parameter after receiver
+   - Pass `ctx` to all AWS SDK calls: `client.Method(ctx, input)`
+   - Pass `ctx` to downstream function calls
+   - Never use `context.TODO()` (production code only uses Background for initialization or propagates caller's ctx)
+
+4. **Context source by layer**:
+   - Handler: `ctx := c.Request().Context()` (Echo) or use Lambda handler's ctx parameter
+   - Service: receive `ctx context.Context` parameter
+   - Repository: receive `ctx context.Context` parameter
+
+Pattern matching rules:
+- `func init()` or `func main()` → use `context.Background()`
+- `func NewRepository()` or `func NewService()` → use `context.Background()` for config.LoadDefaultConfig
+- `func (r *Repository) Method(...)` → add `ctx context.Context` as first param
+- Inside `*_test.go` → `context.TODO()` acceptable
+- Type name matches `*Fake*`, `*Mock*`, `*Stub*` → `context.TODO()` acceptable
+
+Examples:
 
 ```go
-// Test/fake implementation example
-func (f *FakeService) Cleanup() {
-    ctx := context.TODO()
-    resp, err := f.client.ListTables(ctx, &dynamodb.ListTablesInput{})
-    // ...
+// Pattern 1: Client initialization in constructor
+func NewRepository() (*Repository, error) {
+    cfg, err := config.LoadDefaultConfig(context.Background())
+    if err != nil {
+        return nil, err
+    }
+    return &Repository{
+        dynamoClient: dynamodb.NewFromConfig(cfg),
+    }, nil
 }
 
-// Repository layer example
-func (r *Repository) GetItem(ctx context.Context, id string) (Item, error) {
-    result, err := r.dynamoClient.GetItem(ctx, &dynamodb.GetItemInput{
-        TableName: aws.String(r.tableName),
-        Key: map[string]types.AttributeValue{
-            "ID": &types.AttributeValueMemberS{Value: id},
-        },
-    })
-    // ...
+// Pattern 3: Repository method with context propagation
+func (r *Repository) Get(ctx context.Context, id string) error {
+    _, err := r.dynamoClient.GetItem(ctx, &dynamodb.GetItemInput{...})
+    return err
+}
+
+// Pattern 3: Service method propagating context
+func (s *Service) Process(ctx context.Context, id string) error {
+    return s.repo.Get(ctx, id)
+}
+
+// Wrong: Reinitializing client in method (violates rule 1)
+func (r *Repository) Get(ctx context.Context, id string) error {
+    cfg, _ := config.LoadDefaultConfig(context.Background())
+    client := dynamodb.NewFromConfig(cfg)  // DO NOT DO THIS
+    return nil
 }
 ```
 
@@ -570,7 +608,7 @@ var (
 
 func init() {
     cfg, err := config.LoadDefaultConfig(
-        context.TODO(),
+        context.Background(),
         config.WithRegion("ap-northeast-1"),
     )
     if err != nil {
@@ -581,7 +619,7 @@ func init() {
 }
 ```
 
-Use `context.TODO()` in init function, but use caller's context for actual API calls.
+Use `context.Background()` in init function (entry point), but use caller's context for actual API calls.
 
 ## Notes
 
@@ -589,4 +627,4 @@ Use `context.TODO()` in init function, but use caller's context for actual API c
 - Test thoroughly after migration - some APIs have behavioral changes
 - Check AWS SDK Go v2 migration guide for service-specific changes
 - Update unit tests to match new patterns
-- Consider using existing context.Context from caller functions instead of context.TODO()
+- Follow Context Usage Guidelines: use context.Background() for initialization, propagate caller's context for API calls
