@@ -440,6 +440,246 @@ for queryPaginator.HasMorePages() {
 }
 ```
 
+#### Local Endpoint Configuration
+
+For testing with local DynamoDB, use one of the following recommended patterns:
+
+```go
+// v1 (deprecated pattern - do not use)
+cfg, err := config.LoadDefaultConfig(ctx,
+    config.WithEndpointResolverWithOptions(
+        aws.EndpointResolverWithOptionsFunc(
+            func(service, region string, options ...interface{}) (aws.Endpoint, error) {
+                return aws.Endpoint{URL: endpoint}, nil
+            },
+        ),
+    ),
+)
+
+// v2 - Method 1: Service-specific BaseEndpoint (recommended for DynamoDB)
+cfg, err := config.LoadDefaultConfig(ctx)
+if err != nil {
+    // handle error
+}
+client := dynamodb.NewFromConfig(cfg, func(o *dynamodb.Options) {
+    o.BaseEndpoint = aws.String("http://localhost:8000")
+})
+
+// v2 - Method 2: EndpointResolverV2
+cfg, err := config.LoadDefaultConfig(ctx)
+if err != nil {
+    // handle error
+}
+resolver := dynamodb.EndpointResolverFromURL("http://localhost:8000")
+client := dynamodb.NewFromConfig(cfg, func(o *dynamodb.Options) {
+    o.EndpointResolverV2 = resolver
+})
+
+// v2 - Method 3: Global config.WithBaseEndpoint (affects all services)
+cfg, err := config.LoadDefaultConfig(
+    ctx,
+    config.WithBaseEndpoint("http://localhost:8000"),
+)
+if err != nil {
+    // handle error
+}
+client := dynamodb.NewFromConfig(cfg)
+```
+
+**Note**: `WithEndpointResolverWithOptions` is deprecated. For DynamoDB local testing, Method 1 (service-specific `BaseEndpoint`) is recommended as it only affects the DynamoDB client without impacting other AWS services.
+
+#### Error Handling - Type-safe Approach
+
+DynamoDB operations should use type-safe error checking instead of string comparison.
+
+```go
+// v1 - String comparison (not type-safe)
+var apiErr smithy.APIError
+if ok := errors.As(err, &apiErr); ok {
+    if apiErr.ErrorCode() == "ProvisionedThroughputExceededException" {
+        // Typo risk, no compile-time check
+        continue
+    }
+}
+
+// v2 - Type-safe error checking (recommended)
+import (
+    "errors"
+    "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+)
+
+var pte *types.ProvisionedThroughputExceededException
+if errors.As(err, &pte) {
+    // Handle throughput exceeded
+    // Compile-time type checking, IDE autocomplete support
+}
+
+var rnfe *types.ResourceNotFoundException
+if errors.As(err, &rnfe) {
+    // Handle not found
+}
+
+var cve *types.ConditionalCheckFailedException
+if errors.As(err, &cve) {
+    // Handle conditional check failure
+}
+```
+
+**Benefits**:
+- Compile-time type checking
+- No typo risk in error code strings
+- Better IDE support (autocomplete, refactoring)
+- More explicit error handling
+
+#### UpdateItem with Dynamic Expression Building
+
+For complex updates with conditional fields:
+
+```go
+// v2 - Dynamic UpdateExpression with conditional fields
+import "strings"
+
+func buildUpdateExpression(data UpdateData) (
+    ean map[string]string,
+    eav map[string]types.AttributeValue,
+    updateExpr string,
+) {
+    ean = map[string]string{}
+    eav = map[string]types.AttributeValue{}
+    updateList := []string{}
+    removeList := []string{}
+
+    // Conditional field updates
+    if data.Name != nil {
+        ean["#Name"] = "Name"
+        eav[":Name"] = &types.AttributeValueMemberS{Value: *data.Name}
+        updateList = append(updateList, "#Name=:Name")
+    } else {
+        removeList = append(removeList, "#Name")
+    }
+
+    if data.Count != nil {
+        ean["#Count"] = "Count"
+        eav[":Count"] = &types.AttributeValueMemberN{Value: strconv.Itoa(*data.Count)}
+        updateList = append(updateList, "#Count=:Count")
+    }
+
+    // Build expression
+    updateExpr = "SET " + strings.Join(updateList, ",")
+    if len(removeList) > 0 {
+        updateExpr += " REMOVE " + strings.Join(removeList, ",")
+    }
+
+    return
+}
+
+// Usage
+ean, eav, updateExpr := buildUpdateExpression(data)
+input := &dynamodb.UpdateItemInput{
+    Key: map[string]types.AttributeValue{
+        "ID": &types.AttributeValueMemberS{Value: id},
+    },
+    TableName:                 aws.String(tableName),
+    ExpressionAttributeNames:  ean,
+    ExpressionAttributeValues: eav,
+    UpdateExpression:          &updateExpr,
+}
+_, err := client.UpdateItem(ctx, input)
+```
+
+#### Testing with AttributeValue Type Assertions
+
+```go
+// v1 - Direct field access
+if a := result["Code"]; assert.NotNil(t, a) {
+    if v := a.S; assert.NotNil(t, v) {
+        assert.Equal(t, "AAPL", *v)
+    }
+}
+
+// v2 - Type assertion pattern (required)
+if a := result["Code"]; assert.NotNil(t, a) {
+    if v, ok := a.(*types.AttributeValueMemberS); assert.True(t, ok) {
+        assert.Equal(t, "AAPL", v.Value)
+    }
+}
+
+// v2 - Sorting results with type assertion
+sort.SliceStable(results, func(i, j int) bool {
+    codeI, okI := results[i]["Code"].(*types.AttributeValueMemberS)
+    codeJ, okJ := results[j]["Code"].(*types.AttributeValueMemberS)
+    if okI && okJ {
+        return codeI.Value < codeJ.Value
+    }
+    return false
+})
+```
+
+#### Enum Types for Request Parameters
+
+```go
+// v1 - String pointer
+ReturnConsumedCapacity: aws.String(dynamodb.ReturnConsumedCapacityNone)
+
+// v2 - Enum type constant
+ReturnConsumedCapacity: types.ReturnConsumedCapacityNone
+
+// v1 - String pointer for ReturnValues
+ReturnValues: aws.String(dynamodb.ReturnValueAllNew)
+
+// v2 - Enum type
+ReturnValues: types.ReturnValueAllNew
+```
+
+#### Retry Logic Best Practices
+
+When implementing retry logic for throughput exceptions, always include proper limits and backoff:
+
+```go
+import (
+    "errors"
+    "math"
+    "time"
+    "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+)
+
+const maxRetries = 3
+
+func scanWithRetry(ctx context.Context, client *dynamodb.Client, input *dynamodb.ScanInput) (*dynamodb.ScanOutput, error) {
+    retryCount := 0
+
+    for {
+        output, err := client.Scan(ctx, input)
+        if err != nil {
+            var pte *types.ProvisionedThroughputExceededException
+            if errors.As(err, &pte) {
+                if retryCount >= maxRetries {
+                    return nil, fmt.Errorf("max retries exceeded: %w", err)
+                }
+                retryCount++
+                backoff := time.Second * time.Duration(math.Pow(2, float64(retryCount)))
+
+                // Check context deadline
+                select {
+                case <-ctx.Done():
+                    return nil, ctx.Err()
+                case <-time.After(backoff):
+                    continue
+                }
+            }
+            return nil, err
+        }
+        return output, nil
+    }
+}
+```
+
+**Key Points**:
+- Always set maximum retry count to prevent infinite loops
+- Use exponential backoff for retry delays
+- Check context deadline to respect timeout
+- Never use infinite retry loops in production
+
 ## X-Ray Instrumentation
 
 ### v2 SDK Support
