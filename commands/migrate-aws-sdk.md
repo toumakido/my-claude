@@ -127,7 +127,19 @@ Output language: Japanese, formal business tone
    - **Type verification:**
      * Verify enum types use types.X constants (not *string)
      * Verify expression parameters use correct types (map[string]string, not map[string]*string)
-7. Report migration summary with file count and changes
+7. Verify no aws-sdk-go v1 dependencies remain in go.mod:
+   - Check if aws-sdk-go is still listed in go.mod (direct or indirect dependencies)
+   - If aws-sdk-go remains, investigate the cause:
+     ```bash
+     go mod why github.com/aws/aws-sdk-go
+     ```
+   - Show dependency graph to identify which package still depends on v1:
+     ```bash
+     go mod graph | grep 'aws-sdk-go@'
+     ```
+   - Present findings to user with specific package names causing the dependency
+   - Common causes: third-party packages not yet migrated to v2, test dependencies, or missed imports
+8. Report migration summary with file count and changes
 
 ## Migration Patterns
 
