@@ -88,12 +88,10 @@ Output language: Japanese, formal business tone
    - Update Marshal/Unmarshal package imports
    - Preserve existing logic and error handling
 5. Update go.mod dependencies:
-   - Add v2 dependencies: `go get github.com/aws/aws-sdk-go-v2/config`
-   - Add required service packages
-   - DynamoDB: add attributevalue package: `go get github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue`
+   - Get latest v2 packages first: `go get github.com/aws/aws-sdk-go-v2/...@latest`
    - Run `go mod tidy`
    - If submodules exist (independent go.mod files in subdirectories):
-     - Update dependencies in each submodule directory (e.g., `cd lambda/ses-notification && go get github.com/aws/aws-sdk-go-v2/...`)
+     - Update dependencies in each submodule directory: `cd lambda/ses-notification && go get github.com/aws/aws-sdk-go-v2/...@latest`
      - Run `go mod tidy` in each submodule
      - Run `go build` in each submodule to verify
 6. Verify compilation and context usage:
