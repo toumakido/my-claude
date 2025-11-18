@@ -1,4 +1,4 @@
-Review and optimize commands and CLAUDE.md for AI efficiency
+Review and optimize commands and CLAUDE.md for AI efficiency: $ARGUMENTS
 
 Output language: Japanese, formal business tone
 
@@ -8,22 +8,38 @@ Output language: Japanese, formal business tone
 - This command only works for toumakido/my-claude repository
 - gh CLI installed and authenticated
 - Git working tree clean
+- $ARGUMENTS: Optional file paths (space-separated). If empty, all files are targeted.
 
 ## Process
 
-1. Read and analyze all files in this repository:
-   - `commands/*.md` (all command files)
-   - `CLAUDE.md` (global configuration)
-   - `.claude/*` (if exists)
-2. Identify optimization opportunities based on check criteria
-3. If no optimizations found: report that files are already optimal and exit (do not create PR)
-4. If optimizations found: apply using Edit tool
-5. Create branch: `optimize/ai-efficiency-YYYYMMDD` using `git checkout -b`
-6. Commit changes sequentially:
-   - Stage files: `git add commands/*.md CLAUDE.md`
+1. **Parse target files**:
+   - If $ARGUMENTS is not empty:
+     - Parse space-separated file paths from $ARGUMENTS
+     - Verify each file exists using `ls <file>` or Read tool
+     - If any file doesn't exist: output error and exit
+     - Use specified files as target list
+   - If $ARGUMENTS is empty:
+     - Target all files: `commands/*.md`, `CLAUDE.md`, `.claude/*` (if exists)
+
+2. Read and analyze target files from step 1
+
+3. Identify optimization opportunities based on check criteria
+
+4. If no optimizations found: report that files are already optimal and exit (do not create PR)
+
+5. If optimizations found: apply using Edit tool
+
+6. Create branch: `optimize/ai-efficiency-YYYYMMDD` using `git checkout -b`
+
+7. Commit changes sequentially:
+   - Stage modified files only (from target list)
    - Create commit with format specified in CLAUDE.md (no emoji suffixes)
-7. Create PR: `gh pr create --repo toumakido/my-claude --title "optimize: AI efficiency improvements (YYYYMMDD)"`
-8. Display PR URL and summary
+
+8. Create PR:
+   - If $ARGUMENTS was empty: `gh pr create --repo toumakido/my-claude --title "optimize: AI efficiency improvements (YYYYMMDD)"`
+   - If $ARGUMENTS was specified: `gh pr create --repo toumakido/my-claude --title "optimize: AI efficiency for [file names] (YYYYMMDD)"`
+
+9. Display PR URL and summary
 
 ## Check Criteria
 
@@ -129,6 +145,21 @@ Nice-to-have: Minor formatting, additional examples
 - Maintained readability
 ```
 
+## Usage Examples
+
+```bash
+# Optimize all files (default behavior)
+optimize-ai-efficiency
+
+# Optimize specific command files
+optimize-ai-efficiency commands/verify-migration-connections.md
+
+# Optimize multiple files
+optimize-ai-efficiency commands/foo.md commands/bar.md CLAUDE.md
+
+# Note: Glob patterns like commands/verify-*.md are expanded by shell before passing to command
+```
+
 ## Notes
 
 - Only apply changes when genuine optimizations are identified
@@ -137,3 +168,5 @@ Nice-to-have: Minor formatting, additional examples
 - Do not change command functionality
 - Prefer explicit over implicit
 - If breaking changes: confirm with user first
+- When $ARGUMENTS specifies files, only those files are analyzed and modified
+- File verification happens before analysis to fail fast on invalid paths
