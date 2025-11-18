@@ -137,18 +137,27 @@ Output language: Japanese, formal business tone
 
    Return: original code (commented), test assignment code, pre-insert code (if needed)."
 
-9. **Output detailed report**
-   Generate report for selected function with:
-   - File path and function name
-   - Complete call chain
-   - AWS service and resource details
-   - Migration changes summary
-   - Test-ready code modifications
-   - AWS console verification steps
+9. **Apply code modifications with Edit tool**
+   For each data source access identified in step 7:
+   - Use Edit tool to replace original data source call with test data
+   - old_string: exact original code from function
+   - new_string: test data assignment preserving downstream logic
+   - If multiple data sources: apply edits sequentially
+   - Output: "書き換え完了: [file_path:line_number]"
+
+10. **Output detailed report**
+    Generate report for selected function with:
+    - File path and function name
+    - Complete call chain
+    - AWS service and resource details
+    - Migration changes summary
+    - Applied code modifications (show what was changed)
+    - AWS console verification steps
+    - Git diff summary showing changes
 
 ### Phase 4: Loop Back
 
-10. **Prompt for next action with AskUserQuestion**
+11. **Prompt for next action with AskUserQuestion**
     After displaying report, use AskUserQuestion:
     - question: "別の関数を確認しますか？"
     - header: "Next"
@@ -261,15 +270,17 @@ Output language: Japanese, formal business tone
 ## Notes
 
 - Stop immediately if branch diff does not contain `aws-sdk-go-v2` imports
-- Use Task tool for all code analysis (steps 2, 6, 7, 8)
+- Use Task tool for code analysis (steps 2, 6, 7, 8)
+- Use Edit tool to automatically apply code modifications (step 9)
 - Cache function list and call chains from step 3 for reuse in Phase 4 loop
 - Sort call chains by length (shorter chains = easier execution)
 - Present call chains with hop counts for easy comparison
 - Include file:line references in all outputs for navigation
 - Provide complete call chains for traceability
 - Focus on connection configuration (client, endpoints, regions)
-- Make test code modifications copy-paste ready with realistic data
+- Automatically replace data source access with test data
 - Mock only data source access (repository, DB, API, file)
 - Keep AWS SDK v2 calls active to test against real AWS
 - Preserve all business logic between data fetch and AWS call
 - For Get/Delete operations: provide both pre-insert and execution code
+- Show git diff after modifications to verify changes
