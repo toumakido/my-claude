@@ -16,19 +16,26 @@ Output language: Japanese, formal business tone
 
 1. **Fetch and validate PR**
    - Run: `gh pr diff $ARGUMENTS`
-   - Check if diff contains `github.com/aws/aws-sdk-go` imports/changes
-   - If not AWS SDK related, output: "このPRはAWS SDK Go関連の変更を含んでいません" and stop
+   - If diff does not contain `github.com/aws/aws-sdk-go-v2` imports: output "このPRはAWS SDK Go関連の変更を含んでいません" and stop
 
 2. **Extract function list with Task tool** (subagent_type=general-purpose)
-   - Identify all functions/methods that use AWS SDK v2 APIs
-   - For each function, extract:
-     - File path and line number
-     - Function/method name
-     - AWS service type (DynamoDB, S3, SES, etc.)
-     - Brief AWS operation description (PutItem, GetObject, etc.)
+   Task prompt: "Parse PR diff and extract all functions/methods using AWS SDK v2. Search patterns:
+   - Import: `github.com/aws/aws-sdk-go-v2/service/*`
+   - Client calls: `client.PutItem`, `client.GetObject`, etc.
+   - Context parameter: functions with `context.Context` calling AWS clients
 
-3. **Format function list for peco**
-   Create entries in format:
+   For each match, extract:
+   - File path:line_number from diff headers
+   - Function/method name from signature
+   - AWS service from import path (dynamodb, s3, ses, etc.)
+   - Operation from client method name (PutItem, GetObject, etc.)
+
+   Return formatted list only, no analysis."
+
+3. **Format and cache function list**
+   Store Task result in variable for reuse across loop iterations.
+
+   Format entries as:
    ```
    <file_path>:<line_number> | <function_name> | <AWS_Service> <Operation>
    ```
@@ -38,7 +45,7 @@ Output language: Japanese, formal business tone
    internal/gateway/s3.go:120 | (*S3Gateway).Upload | S3 PutObject
    ```
 
-   Output initial summary:
+   Output:
    ```
    === AWS SDK v2を使用している関数一覧 ===
 
@@ -63,32 +70,65 @@ Output language: Japanese, formal business tone
 ### Phase 3: Detailed Analysis for Selected Function
 
 6. **Analyze selected function with Task tool** (subagent_type=general-purpose)
-   For the selected function:
-   - Find entry point (main.go, Lambda handler, HTTP handler)
-   - Trace complete call chain from entry point to AWS SDK call
-   - Identify intermediate layers (service, usecase, repository, gateway)
-   - Extract AWS connection settings (region, endpoint, resource names)
-   - Document v1 → v2 migration patterns
+   Task prompt: "For function [function_name] at [file_path:line_number]:
 
-7. **Identify data source access for mocking**
-   For the selected function:
-   - Scan function body from start to AWS SDK call
-   - Identify all data source access operations:
-     - Repository/gateway method calls
-     - Database queries (SQL, etc.)
-     - External API calls
-     - File system reads
-   - Extract return type for each data source access
-   - Note variable names used to store retrieved data
+   1. Find entry point using Grep:
+      - Search `main\(` in cmd/main.go or main.go
+      - Search `handler\(` for Lambda handlers
+      - Search `ServeHTTP\|Handle` for HTTP handlers
 
-8. **Generate test data and code modifications**
-   For each identified data source access:
-   - Create test data matching return type structure
-   - Generate code modification showing:
-     - Original data source call (commented out)
-     - Test data assignment
-     - Preserved downstream logic
-   - For Get/Delete AWS operations: include pre-insert setup code
+   2. Trace call chain using Grep from entry point to [function_name]:
+      - Search [function_name] references
+      - Identify intermediate layers (usecase/service/repository/gateway)
+
+   3. Extract AWS settings from [function_name] using Read:
+      - Region: look for `WithRegion\|AWS_REGION`
+      - Resource: table name, bucket name from client call parameters
+      - Endpoint: look for `WithEndpointResolver\|endpoint`
+
+   4. Document v1 → v2 changes from PR diff:
+      - Client init: session.New vs config.LoadDefaultConfig
+      - API call: old vs new method signature
+      - Type changes: aws.String vs direct string usage
+
+   Return: call chain, AWS settings, migration summary."
+
+7. **Identify data source access with Task tool** (subagent_type=general-purpose)
+   Task prompt: "In function [function_name] at [file_path:line_number], identify ALL data source access BEFORE AWS SDK calls using Read:
+
+   Search patterns:
+   - Repository/gateway calls: `repo\.\|gateway\.\|[A-Z][a-z]*Repository\|[A-Z][a-z]*Gateway`
+   - Database: `db\.Query\|db\.Exec\|\.Scan\|\.QueryRow`
+   - HTTP: `client\.Get\|client\.Post\|http\.Do`
+   - File: `os\.ReadFile\|ioutil\.ReadFile\|os\.Open`
+   - Cache: `cache\.Get\|redis\.Get`
+
+   For each match, extract:
+   - Line number
+   - Method signature or function call
+   - Variable name storing result
+   - Return type from function declaration or type inference
+
+   Return: list with line numbers, calls, variables, types."
+
+8. **Generate test data with Task tool** (subagent_type=general-purpose)
+   Task prompt: "For each data source access from step 7, generate test data and code modification:
+
+   For each access:
+   1. Create test data matching return type:
+      - Struct: `&StructName{Field: \"value\", ...}` (use realistic values)
+      - Slice: `[]Type{elem1, elem2}`
+      - Map: `map[KeyType]ValueType{\"key\": value}`
+      - Primitive: use realistic value
+      - Pointer: use `&Type{...}`
+
+   2. Generate code modification:
+      - Comment out original call with `//`
+      - Assign test data to same variable
+      - Preserve all downstream logic
+      - If AWS operation is Get/Delete: provide pre-insert code block
+
+   Return: original code (commented), test assignment code, pre-insert code (if needed)."
 
 9. **Output detailed report**
    Generate report for selected function with:
@@ -174,85 +214,41 @@ internal/gateway/s3.go:120 | (*S3Gateway).Upload | S3 PutObject
 - 設定確認: [region/endpoint/認証情報など]
 ```
 
-## Analysis Guidelines
+## Analysis Requirements
 
-### Function Extraction (Phase 1)
-- Search for these patterns in PR diff:
-  - `context.Context` parameter with AWS SDK v2 client calls
-  - Package imports: `github.com/aws/aws-sdk-go-v2/service/*`
-  - Client method calls: `client.PutItem`, `client.GetObject`, etc.
-- Group by file and extract function signatures
-- Identify AWS service from import path or client type
-- Format for easy scanning in peco selection
-
-### Single Function Analysis (Phase 3)
+### General
 - Focus on production AWS connections (exclude localhost/test endpoints)
-- Trace complete call chain from entry point to AWS SDK v2 call
-- Extract AWS resource names (table names, bucket names, queue URLs)
-- Identify region configuration (explicit or AWS_REGION env)
+- Extract resource names (table names, bucket names, queue URLs)
+- Identify region configuration (explicit config or AWS_REGION env var)
 - Summarize v1 → v2 migration patterns clearly
 - Provide actionable AWS console verification steps
 
-### Data Source Identification (Phase 3)
-- For selected function only, look for these patterns BEFORE AWS SDK calls:
-  - `repo.Method()` / `gateway.Method()` calls
-  - Direct database queries (`db.Query`, `db.Exec`)
-  - HTTP client calls (`client.Get`, `http.Do`)
-  - File reads (`os.ReadFile`, `ioutil.ReadFile`)
-  - Cache access (`cache.Get`)
-- Extract function signatures from PR diff or declaration
-- Note variable names that store retrieved data
-
-### Test Data Generation (Phase 3)
-- Match Go types exactly:
-  - Structs: `&StructName{Field: value, ...}`
-  - Slices: `[]Type{elem1, elem2}`
-  - Maps: `map[KeyType]ValueType{key: value}`
-  - Primitives: use realistic values
+### Test Data and Code Modifications
+- Match Go types exactly (structs, slices, maps, primitives, pointers)
 - Include all fields used in downstream logic
-- For pointer types, use address operator: `&Type{}`
-- For error returns: comment out error handling
-
-### Code Modification Instructions (Phase 3)
-- Show original code with `//` comments (preserve indentation)
-- Show test data assignment (match variable name exactly)
-- Indicate preserved logic: validation, transformation, AWS SDK call
+- Comment out error handling for test data
+- Preserve indentation in code blocks
+- Match variable names exactly from original code
 - For AWS Get/Delete: provide separate pre-insert code block
-- Use `<details>` tags for better readability
+- Use `<details>` tags for readability
 
-### Interactive UX (Phase 2 & 4)
-- Use peco for smooth selection experience
-- Clear prompts in Japanese
-- Handle Ctrl-C gracefully
-- Allow easy navigation between multiple functions
-- Confirm before looping back
+### Interactive UX
+- Use peco for function selection
+- Handle Ctrl-C gracefully with "終了しました"
+- Allow multiple function analysis in single session
+- Confirm before looping: "別の関数を確認しますか？ (y/n):"
+- If peco not installed: output "pecoがインストールされていません。brew install pecoを実行してください" and stop
 
 ## Notes
 
-### Command Behavior
-- Stop immediately if PR is not AWS SDK Go related
-- Use Task tool for all code analysis (avoid manual grep/read)
-- Cache initial function list to avoid re-analyzing on each loop iteration
-- Include file:line references for easy navigation
-- If peco is not installed, provide clear error with installation instructions
-- Handle edge cases: no functions found, invalid selection, etc.
-
-### Interactive Flow
-- Phase 1: Extract all functions once (cached for loop)
-- Phase 2: User selects function via peco
-- Phase 3: Detailed analysis for selected function only
-- Phase 4: Loop back or exit
-- Keep analysis context between iterations for performance
-
-### Output Quality
+- Stop immediately if PR does not contain `aws-sdk-go-v2` imports
+- Use Task tool for all code analysis (steps 2, 6, 7, 8)
+- Cache function list from step 3 for reuse in Phase 4 loop
+- Include file:line references in all outputs for navigation
 - Provide complete call chains for traceability
 - Focus on connection configuration (client, endpoints, regions)
-- Include specific AWS console verification steps
-- Make test code modifications copy-paste ready
-- Show realistic test data that matches actual types
-
-### Testing Approach
+- Make test code modifications copy-paste ready with realistic data
 - Mock only data source access (repository, DB, API, file)
-- Keep AWS SDK v2 calls active (they will use test data)
+- Keep AWS SDK v2 calls active to test against real AWS
 - Preserve all business logic between data fetch and AWS call
-- For Get/Delete: provide both pre-insert and execution code
+- For Get/Delete operations: provide both pre-insert and execution code
