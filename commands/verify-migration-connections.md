@@ -2,6 +2,18 @@ Interactively analyze AWS SDK migration function by function
 
 Output language: Japanese, formal business tone
 
+## Command Purpose
+
+This command **actually tests** AWS connections after AWS SDK Go v1→v2 migration by automatically executing:
+
+1. Extract and analyze migrated functions
+2. Generate test data and pre-insert to DynamoDB/S3
+3. Mock external APIs (data source replacement)
+4. **Apply actual code modifications** (automatic rewrite with Edit tool)
+5. Execute AWS SDK v2 API tests
+
+**Important**: This command does not just analyze - it **actually modifies code**. Changes can be reverted with `git restore` if under Git management.
+
 ## Prerequisites
 
 - Run from repository root
@@ -176,7 +188,7 @@ Output language: Japanese, formal business tone
 
    Return: AWS operation type (Read/Delete/Write), operation name, line number, AWS settings, migration summary. Use [selected_chain] as call chain (do not re-trace)."
 
-7. **Identify data source access with Task tool** (subagent_type=general-purpose)
+8. **Identify data source access with Task tool** (subagent_type=general-purpose)
    Task prompt: "In function [function_name] at [file_path:line_number], identify ALL data source access BEFORE AWS SDK calls using Read:
 
    Search patterns:
@@ -194,60 +206,124 @@ Output language: Japanese, formal business tone
 
    Return: list with line numbers, calls, variables, types."
 
-8. **Generate test data and pre-insert code with Task tool** (subagent_type=general-purpose)
-   Task prompt: "Generate test data and code modifications:
+9. **Validate and extract type information with Task tool** (subagent_type=general-purpose)
+   Task prompt: "Before generating test data, extract and validate type information:
 
-   Part A - Data source access replacement (from step 7):
+   1. Find model definitions using Glob:
+      - Search for `type.*struct` in `model.go`, `models.go`, `types.go`, `entity.go`, `dto.go`
+      - Search in same directory as [file_path] and parent directories
+      - Check return types in function signatures
+
+   2. Extract type information for each data source return type (from step 8):
+      - Struct fields and their types (including pointer types: `*string`, `*int64`, `*bool`)
+      - Slice element types (distinguish `[]*Type` vs `[]Type`)
+      - Map key/value types
+      - Exported vs unexported fields
+      - Nested struct types
+
+   3. Check required imports for test data:
+      - AWS SDK v2 packages: `github.com/aws/aws-sdk-go-v2/aws`, `github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue`, `github.com/aws/aws-sdk-go-v2/service/*/types`
+      - Standard library packages for test data construction
+
+   4. For each struct type, document:
+      - Full type name (e.g., `Account`, `*Account`, `[]Account`, `[]*Account`)
+      - All field names with exact casing (e.g., `CustomerCode` not `AccountID`)
+      - Field types with pointer indicators (e.g., `*string`, `int64`, `*bool`)
+      - Example: `type Account struct { BranchCode string; CustomerCode string; Balance *int64 }`
+
+   Return: Type information map with exact field names, types, pointer indicators, and required imports list."
+
+10. **Generate test data and pre-insert code with Task tool** (subagent_type=general-purpose)
+   Task prompt: "Generate test data and code modifications using validated type information from step 9:
+
+   Part A - Data source access replacement (from step 8):
    For each data source access:
-   1. Create test data matching return type:
-      - Struct: `&StructName{Field: \"value\", ...}` (use realistic values)
-      - Slice: `[]Type{elem1, elem2}`
-      - Map: `map[KeyType]ValueType{\"key\": value}`
-      - Primitive: use realistic value
-      - Pointer: use `&Type{...}`
+   1. Use exact type information from step 9:
+      - Match struct field names exactly (e.g., `CustomerCode` not `AccountID`)
+      - Use pointer types where required: `aws.String(\"value\")`, `aws.Int64(123)`
+      - Match slice element types: `[]*Type` vs `[]Type`
+      - Example for Account struct:
+        ```go
+        // From step 9: type Account struct { BranchCode string; CustomerCode string; Balance *int64 }
+        testAccount := &Account{
+            BranchCode:   \"100\",
+            CustomerCode: \"123456\", // Not AccountID
+            Balance:      aws.Int64(1000000),
+        }
+        ```
 
-   2. Generate code modification:
+   2. Include all required imports in new_string:
+      - Add missing imports from step 9 to import block
+      - Example: `\"github.com/aws/aws-sdk-go-v2/aws\"`, `\"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue\"`
+
+   3. Generate code modification:
       - Comment out original call with `//`
       - Assign test data to same variable
       - Preserve all downstream logic
 
-   Part B - AWS SDK pre-insert code (from step 6):
+   Part B - AWS SDK pre-insert code (from step 7):
    If AWS operation type is Read or Delete:
    1. Generate pre-insert code to populate test data:
-      - For GetItem: generate PutItem with same key
+      - For GetItem/Scan/Query: generate PutItem with same key
       - For GetObject: generate PutObject with same key
       - For DeleteItem: generate PutItem with same key
-      - Use same resource (table/bucket) from step 6
-      - Use realistic test data values
+      - Use same resource (table/bucket) from step 7
+      - Use realistic test data values with correct types from step 9
 
    2. Identify insertion point:
       - Line number just before AWS SDK Read/Delete operation
       - Preserve indentation
 
    Return:
-   - Data source replacements: [original code (commented), test assignment code]
+   - Data source replacements: [original code (commented), test assignment code with imports]
    - Pre-insert code (if AWS operation is Read/Delete): [pre-insert code, insertion line number]"
 
-9. **Apply code modifications with Edit tool**
+11. **Apply code modifications with Edit tool**
 
-   Part A - Replace data source access (from step 8 Part A):
-   For each data source access identified in step 7:
+   **Important**: This step applies actual code changes. This is not just analysis.
+
+   Part A - Replace data source access (from step 10 Part A):
+   For each data source access identified in step 8:
    - Use Edit tool to replace original data source call with test data
    - old_string: exact original code from function
    - new_string: test data assignment preserving downstream logic
    - If multiple data sources: apply edits sequentially
    - Output: "データソース書き換え完了: [file_path:line_number]"
 
-   Part B - Insert pre-insert code (from step 8 Part B):
+   Part B - Insert pre-insert code (from step 10 Part B):
    If AWS operation type is Read or Delete:
    - Use Edit tool to insert pre-insert code before AWS SDK operation
-   - Identify the line before AWS SDK call using line number from step 8
+   - Identify the line before AWS SDK call using line number from step 10
    - old_string: line before AWS SDK operation (preserve exact indentation)
    - new_string: line before AWS SDK operation + "\n" + pre-insert code (with proper indentation)
    - Output: "Pre-insertコード追加: [file_path:line_number]"
    - Add comment above pre-insert code: "// Pre-insert: test data for [operation_name]"
 
-10. **Output detailed report**
+   Part C - Add verification logging (from step 9):
+   For Read operations (Scan, Query, GetItem, GetObject):
+   - Use Edit tool to insert logging code after AWS SDK Read operation
+   - Extract key fields from type information (step 9)
+   - Log format:
+     ```go
+     // Verify Pre-insert: log retrieved records
+     logger.Infof(\"[function_name] returned %d records\", len(result))
+     for i, record := range result {
+         logger.Infof(\"  [%d] Key1=%v, Key2=%v, ...\", i, record.Key1, record.Key2)
+     }
+     ```
+   - Insert after Read operation, before any result length check
+   - Output: "検証ログ追加: [file_path:line_number]"
+
+12. **Verify compilation with Bash tool**
+   - Run: `go build -o /tmp/test-build 2>&1`
+   - If compilation fails:
+     - Analyze error messages
+     - Fix missing imports, type mismatches, undefined fields
+     - Retry Edit tool with corrections
+     - Repeat until compilation succeeds
+   - Output: "コンパイル成功: [file_path]"
+
+13. **Output detailed report**
     Generate report for selected function with:
     - File path and function name
     - Complete call chain
@@ -257,15 +333,19 @@ Output language: Japanese, formal business tone
     - Applied code modifications:
       - Data source replacements (if any)
       - Pre-insert code (if AWS operation is Read/Delete)
+      - Verification logging (if AWS operation is Read)
+    - Compilation status
     - AWS console verification steps
     - Git diff summary showing changes
 
-11. **Output brief summary for current chain**
+14. **Output brief summary for current chain**
     ```
     完了 (i/N): [file_path]
     - AWS操作: [operation_type] ([operation_name])
     - データソースモック: X個
     - Pre-insertコード: 追加済み / 不要
+    - 検証ログ: 追加済み / 不要
+    - コンパイル: 成功 / 失敗
     ```
 
    C. Proceed to next chain automatically (no user interaction)
@@ -274,14 +354,14 @@ Output language: Japanese, formal business tone
 
 ### Phase 4: Final Summary
 
-12. **Output final summary report**
+15. **Output final summary report**
     After processing all chains, display comprehensive summary:
 
     ```
     === 処理完了サマリー ===
 
     処理したSDK関数: N個
-    - Read操作: X個 (Pre-insertコード追加済み)
+    - Read操作: X個 (Pre-insertコード追加済み、検証ログ追加済み)
     - Write操作: Y個
     - Delete操作: Z個 (Pre-insertコード追加済み)
     - 複数SDK使用: W個
@@ -292,12 +372,16 @@ Output language: Japanese, formal business tone
     ...
 
     データソースモック: 合計M個
+    検証ログ: 合計L個
+    コンパイル: 成功P個 / 失敗Q個
 
     次のステップ:
     1. git diff で変更内容を確認
-    2. アプリケーションを実行してAWS接続をテスト
-    3. CloudWatchログで各API呼び出しを確認
-    4. 必要に応じてテストデータを調整
+    2. コンパイルエラーがある場合は修正
+    3. アプリケーションを実行してAWS接続をテスト
+    4. ログ出力から取得レコード数と内容を確認
+    5. CloudWatchログで各API呼び出しを確認
+    6. 必要に応じてテストデータを調整
 
     すべての処理が完了しました。
     ```
@@ -466,16 +550,37 @@ _, err := client.PutItem(ctx, &dynamodb.PutItemInput{
 - Provide actionable AWS console verification steps
 
 ### Test Data and Code Modifications
+- **Type validation (step 9)**: Extract exact type information before generating test data
+  - Match struct field names exactly (e.g., `CustomerCode` not `AccountID`)
+  - Distinguish pointer types: `*string`, `*int64`, `*bool`
+  - Distinguish slice element types: `[]*Type` vs `[]Type`
+  - Include all required imports: `aws`, `attributevalue`, service-specific `types`
 - Match Go types exactly (structs, slices, maps, primitives, pointers)
 - Include all fields used in downstream logic
 - Comment out error handling for test data
 - Preserve indentation in code blocks
 - Match variable names exactly from original code
 - For AWS Read/Delete operations:
-  - Generate pre-insert code to populate test data (e.g., PutItem before GetItem)
+  - Generate pre-insert code to populate test data (e.g., PutItem before GetItem/Scan/Query)
   - Automatically insert pre-insert code before AWS SDK operation
   - Add comment: "// Pre-insert: test data for [operation_name]"
+  - Add verification logging after Read operation to confirm data retrieval
 - Use `<details>` tags for readability
+
+### Complex Chain Handling
+- **Multiple AWS SDK calls**: Process all SDK calls within the same function
+  - Step 2 identifies chains with multiple SDK methods and prioritizes them
+  - Step 7 identifies all AWS SDK operations within the function
+  - Steps 8-11 process each SDK operation independently
+  - Generate separate Pre-insert code for each Read/Delete operation
+  - Apply data source mocks once (shared across all SDK operations in the function)
+- **Complex detection criteria** (for reference):
+  - AWS SDK calls: 3 or more operations
+  - Data source access: 4 or more calls
+  - Call chain depth: 6 or more hops
+- **Processing approach**: Attempt automatic processing for all chains
+  - Only suggest manual intervention when Task tool encounters unrecoverable errors
+  - Provide clear error context and suggested fixes when manual intervention needed
 
 ### Batch Processing UX
 - Phase 1: Extract and deduplicate automatically
@@ -487,8 +592,9 @@ _, err := client.PutItem(ctx, &dynamodb.PutItemInput{
 ## Notes
 
 - Stop immediately if branch diff does not contain `aws-sdk-go-v2` imports
-- Use Task tool for code analysis (steps 2, 3, 7, 8, 9)
-- Use Edit tool to automatically apply code modifications (step 10)
+- Use Task tool for code analysis (steps 2, 3, 7, 8, 9, 10)
+- Use Edit tool to automatically apply code modifications (step 11)
+- Use Bash tool for compilation verification (step 12)
 - **Deduplication** (step 3):
   - Group chains by SDK operation type (AWS_service + SDK_operation)
   - Ignore: file path, line number, function name, region, endpoint, table/bucket names, filters, and all parameters
@@ -508,13 +614,23 @@ _, err := client.PutItem(ctx, &dynamodb.PutItemInput{
 - Provide complete call chains for traceability
 - Identify AWS operation type (Read/Delete/Write) in step 7
 - Focus on connection configuration (client, endpoints, regions)
-- Automatically replace data source access with test data (step 10 Part A)
+- **Type validation and test data generation**:
+  - Extract exact type information in step 9 (field names, pointer types, slice types)
+  - Generate test data with correct types in step 10 Part A
+  - Include required imports (aws, attributevalue, types)
+- Automatically replace data source access with test data (step 11 Part A)
 - Mock only data source access (repository, DB, API, file)
 - For AWS Read/Delete operations:
-  - Generate pre-insert code to populate test data (step 9 Part B)
-  - Automatically insert pre-insert code before AWS SDK operation (step 10 Part B)
+  - Generate pre-insert code to populate test data (step 10 Part B)
+  - Automatically insert pre-insert code before AWS SDK operation (step 11 Part B)
+  - Add verification logging after Read operation (step 11 Part C)
   - Enables testing of read/delete operations with pre-populated data
+- **Compilation verification** (step 12):
+  - Run `go build` after code modifications
+  - Fix compilation errors automatically (imports, types, fields)
+  - Retry until compilation succeeds
 - Keep AWS SDK v2 calls active to test against real AWS
 - Preserve all business logic between data fetch and AWS call
 - Show git diff after modifications to verify changes
 - Display final summary with statistics after all processing complete
+  - Include compilation status (success/failure counts)
