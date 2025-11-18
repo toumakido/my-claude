@@ -35,12 +35,21 @@ Output language: Japanese, formal business tone
    - Search function references to trace call paths
    - Identify intermediate layers (usecase/service/repository/gateway)
    - Build complete chains: entry → intermediate → SDK function
+   - For each chain, count all AWS SDK v2 method calls within the chain
+   - Mark chains with multiple SDK methods as high priority
 
-   Step 3: If function has multiple call chains:
-   - Sort by chain length (shorter = easier to execute)
-   - Prioritize shorter chains in output
+   Step 3: Sort call chains by priority:
+   1. First: Chains with multiple AWS SDK methods (higher priority)
+   2. Within same SDK method count: Sort by chain length (shorter = easier)
 
-   Return: function list with all call chains sorted by preference."
+   Example priority order:
+   - Chain with 3 SDK methods, 4 hops (highest)
+   - Chain with 2 SDK methods, 2 hops
+   - Chain with 2 SDK methods, 5 hops
+   - Chain with 1 SDK method, 2 hops
+   - Chain with 1 SDK method, 4 hops (lowest)
+
+   Return: function list with all call chains sorted by priority."
 
 3. **Format and cache results**
    Store Task result in variable for reuse across loop iterations.
@@ -52,28 +61,31 @@ Output language: Japanese, formal business tone
    検出された関数数: N個
    検出された呼び出しパターン数: M個
 
-   [Sorted by execution ease]
+   [Sorted by priority: multiple SDK methods first, then by chain length]
    ```
 
 ### Phase 2: Interactive Selection Loop
 
 4. **Present selection UI with AskUserQuestion**
-   - Take up to 4 call chains from cached results (sorted by execution ease)
+   - Take up to 4 call chains from cached results (sorted by priority)
    - Format each option:
-     - label: `[Function] file:line`
-     - description: Complete call chain with → separators
+     - label: `[Function] file:line [★ Multiple SDK]` (if chain has multiple SDK methods)
+     - description: Complete call chain with → separators, SDK method count, hop count
 
    Example options:
    ```
-   label: "[Save] internal/repository/user.go:45"
-   description: "main → UserUsecase.Create → UserRepository.Save → DynamoDB PutItem (3 hops)"
+   label: "[ProcessOrder] internal/service/order.go:120 [★ Multiple SDK]"
+   description: "main → OrderService.Process → DynamoDB PutItem → S3 PutObject → SES SendEmail (3 SDK methods, 4 hops)"
 
    label: "[Save] internal/repository/user.go:45"
-   description: "handler → AdminService.Import → UserUsecase.Migrate → UserRepository.Save → DynamoDB PutItem (4 hops)"
+   description: "main → UserUsecase.Create → UserRepository.Save → DynamoDB PutItem (1 SDK method, 3 hops)"
+
+   label: "[Import] internal/gateway/data.go:89 [★ Multiple SDK]"
+   description: "handler → ImportService.Run → S3 GetObject → DynamoDB BatchWriteItem (2 SDK methods, 5 hops)"
    ```
 
    AskUserQuestion parameters:
-   - question: "検証する関数と呼び出しチェーンを選択してください"
+   - question: "検証する関数と呼び出しチェーンを選択してください（★は複数SDK使用で重要度高）"
    - header: "Function"
    - multiSelect: false
    - Include "次の4件を表示" option if more than 4 chains remain
@@ -137,18 +149,27 @@ Output language: Japanese, formal business tone
 
    Return: original code (commented), test assignment code, pre-insert code (if needed)."
 
-9. **Output detailed report**
-   Generate report for selected function with:
-   - File path and function name
-   - Complete call chain
-   - AWS service and resource details
-   - Migration changes summary
-   - Test-ready code modifications
-   - AWS console verification steps
+9. **Apply code modifications with Edit tool**
+   For each data source access identified in step 7:
+   - Use Edit tool to replace original data source call with test data
+   - old_string: exact original code from function
+   - new_string: test data assignment preserving downstream logic
+   - If multiple data sources: apply edits sequentially
+   - Output: "書き換え完了: [file_path:line_number]"
+
+10. **Output detailed report**
+    Generate report for selected function with:
+    - File path and function name
+    - Complete call chain
+    - AWS service and resource details
+    - Migration changes summary
+    - Applied code modifications (show what was changed)
+    - AWS console verification steps
+    - Git diff summary showing changes
 
 ### Phase 4: Loop Back
 
-10. **Prompt for next action with AskUserQuestion**
+11. **Prompt for next action with AskUserQuestion**
     After displaying report, use AskUserQuestion:
     - question: "別の関数を確認しますか？"
     - header: "Next"
@@ -169,16 +190,22 @@ Output language: Japanese, formal business tone
 検出された関数数: N個
 検出された呼び出しパターン数: M個
 
-[Sorted by execution ease - shorter chains first]
+[Sorted by priority: multiple SDK methods first, then by chain length]
 
-1. internal/repository/user.go:45 | (*UserRepository).Save | DynamoDB PutItem
-   Chain: main → UserUsecase.Create → UserRepository.Save (2 hops)
+1. internal/service/order.go:120 | (*OrderService).Process | DynamoDB + S3 + SES [★ Multiple SDK]
+   Chain: main → OrderService.Process → DynamoDB PutItem → S3 PutObject → SES SendEmail (3 SDK methods, 4 hops)
 
-2. internal/repository/user.go:45 | (*UserRepository).Save | DynamoDB PutItem
-   Chain: handler → AdminService.Import → UserUsecase.Migrate → UserRepository.Save (3 hops)
+2. internal/gateway/data.go:89 | (*DataGateway).Import | S3 + DynamoDB [★ Multiple SDK]
+   Chain: handler → ImportService.Run → S3 GetObject → DynamoDB BatchWriteItem (2 SDK methods, 5 hops)
 
-3. internal/gateway/s3.go:120 | (*S3Gateway).Upload | S3 PutObject
-   Chain: main → FileService.Process → S3Gateway.Upload (2 hops)
+3. internal/repository/user.go:45 | (*UserRepository).Save | DynamoDB PutItem
+   Chain: main → UserUsecase.Create → UserRepository.Save (1 SDK method, 2 hops)
+
+4. internal/gateway/s3.go:120 | (*S3Gateway).Upload | S3 PutObject
+   Chain: main → FileService.Process → S3Gateway.Upload (1 SDK method, 2 hops)
+
+5. internal/repository/user.go:45 | (*UserRepository).Save | DynamoDB PutItem
+   Chain: handler → AdminService.Import → UserUsecase.Migrate → UserRepository.Save (1 SDK method, 3 hops)
 ...
 ```
 
@@ -261,15 +288,20 @@ Output language: Japanese, formal business tone
 ## Notes
 
 - Stop immediately if branch diff does not contain `aws-sdk-go-v2` imports
-- Use Task tool for all code analysis (steps 2, 6, 7, 8)
+- Use Task tool for code analysis (steps 2, 6, 7, 8)
+- Use Edit tool to automatically apply code modifications (step 9)
 - Cache function list and call chains from step 3 for reuse in Phase 4 loop
-- Sort call chains by length (shorter chains = easier execution)
-- Present call chains with hop counts for easy comparison
+- Sort call chains by priority:
+  1. Chains with multiple AWS SDK methods (higher priority/重要度高)
+  2. Within same SDK method count: shorter chains first (easier execution)
+- Present call chains with SDK method count and hop counts
+- Mark chains with multiple SDK methods with [★ Multiple SDK] indicator
 - Include file:line references in all outputs for navigation
 - Provide complete call chains for traceability
 - Focus on connection configuration (client, endpoints, regions)
-- Make test code modifications copy-paste ready with realistic data
+- Automatically replace data source access with test data
 - Mock only data source access (repository, DB, API, file)
 - Keep AWS SDK v2 calls active to test against real AWS
 - Preserve all business logic between data fetch and AWS call
 - For Get/Delete operations: provide both pre-insert and execution code
+- Show git diff after modifications to verify changes
