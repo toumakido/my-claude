@@ -51,53 +51,94 @@ Output language: Japanese, formal business tone
 
    Return: function list with all call chains sorted by priority."
 
-3. **Format and cache results**
-   Store Task result in variable for reuse across loop iterations.
+3. **Group and deduplicate chains with Task tool** (subagent_type=general-purpose)
+   Task prompt: "Group and deduplicate call chains to create optimal combination:
+
+   Step 1: Group by unique SDK function
+   - Key: file_path:line_number + function_name + SDK_operation
+   - Value: list of call chains targeting same SDK function
+   - Example: all chains to 'internal/repository/user.go:45 | Save | DynamoDB PutItem' are grouped
+
+   Step 2: Select representative chain from each group
+   For each group with multiple chains:
+   - Priority 1: Shortest chain (fewest hops)
+   - Priority 2: Entry point is 'main' function
+   - Priority 3: First in list (tie-breaker)
+   - Mark selected chain with: [+N other chains] where N = group size - 1
+
+   For groups with single chain:
+   - Select the only chain
+   - No marker needed
+
+   Step 3: Create optimal combination
+   - Combine all selected representative chains
+   - Maintain original priority sorting (from step 2)
+   - Result: minimal set covering all unique SDK functions
+
+   Return: optimal combination (deduplicated chains), each with group info"
+
+4. **Format and cache optimal combination**
+   Store Task result in variable for batch processing.
 
    Output:
    ```
-   === AWS SDK v2を使用している関数一覧 ===
+   === 重複排除と最適化後の組み合わせ ===
 
-   検出された関数数: N個
-   検出された呼び出しパターン数: M個
+   合計SDK関数数: N個 (重複排除前: M個のチェーン)
+   選択されたチェーン数: N個
 
    [Sorted by priority: multiple SDK methods first, then by chain length]
+
+   各チェーンに [+X other chains] マーカーを表示（重複がある場合）
    ```
 
-### Phase 2: Interactive Selection Loop
+### Phase 2: Batch Approval
 
-4. **Present selection UI with AskUserQuestion**
-   - Take up to 4 call chains from cached results (sorted by priority)
-   - Format each option:
-     - label: `[Function] file:line [★ Multiple SDK]` (if chain has multiple SDK methods)
-     - description: Complete call chain with → separators, SDK method count, hop count
+5. **Present optimal combination and get batch approval**
 
-   Example options:
+   A. Display summary of optimal combination:
    ```
-   label: "[ProcessOrder] internal/service/order.go:120 [★ Multiple SDK]"
-   description: "main → OrderService.Process → DynamoDB PutItem → S3 PutObject → SES SendEmail (3 SDK methods, 4 hops)"
+   === バッチ処理する組み合わせ ===
 
-   label: "[Save] internal/repository/user.go:45"
-   description: "main → UserUsecase.Create → UserRepository.Save → DynamoDB PutItem (1 SDK method, 3 hops)"
+   合計SDK関数数: N個
+   - Read操作: X個
+   - Write操作: Y個
+   - Delete操作: Z個
+   - 複数SDK使用: W個
 
-   label: "[Import] internal/gateway/data.go:89 [★ Multiple SDK]"
-   description: "handler → ImportService.Run → S3 GetObject → DynamoDB BatchWriteItem (2 SDK methods, 5 hops)"
+   処理対象のチェーン:
+   1. [file:line] | [function] | [operations] [markers]
+   2. [file:line] | [function] | [operations] [markers]
+   ...
    ```
 
-   AskUserQuestion parameters:
-   - question: "検証する関数と呼び出しチェーンを選択してください（★は複数SDK使用で重要度高）"
-   - header: "Function"
+   B. Request batch approval with AskUserQuestion:
+   - question: "この組み合わせでN個のSDK関数をバッチ処理しますか？"
+   - header: "Batch"
    - multiSelect: false
-   - Include "次の4件を表示" option if more than 4 chains remain
+   - options:
+     - label: "はい", description: "N個のSDK関数を全自動で順次処理"
+     - label: "いいえ", description: "キャンセルして終了"
 
-5. **Handle selection**
-   - If "次の4件を表示" selected: show next 4 chains, repeat step 4
-   - If chain selected: extract file path, function name, and chain
-   - Proceed to Phase 3
+   C. Handle response:
+   - If "はい" selected: proceed to Phase 3 (batch processing)
+   - If "いいえ" selected: exit with "処理をキャンセルしました"
 
-### Phase 3: Detailed Analysis for Selected Function
+### Phase 3: Batch Processing
 
-6. **Analyze selected function with Task tool** (subagent_type=general-purpose)
+6. **Process all chains in optimal combination sequentially**
+
+   For each chain in optimal combination (index i from 1 to N):
+
+   A. Display progress:
+   ```
+   === 処理中 (i/N) ===
+   関数: [file_path:line_number] | [function_name] | [operations]
+   ```
+
+   B. Execute steps 7-11 for current chain
+
+7. **Analyze selected function with Task tool** (subagent_type=general-purpose)
    Task prompt: "For function [function_name] at [file_path:line_number] with call chain [selected_chain]:
 
    1. Identify AWS SDK operation type using Read:
@@ -204,46 +245,91 @@ Output language: Japanese, formal business tone
     - AWS console verification steps
     - Git diff summary showing changes
 
-### Phase 4: Loop Back
+11. **Output brief summary for current chain**
+    ```
+    完了 (i/N): [file_path]
+    - AWS操作: [operation_type] ([operation_name])
+    - データソースモック: X個
+    - Pre-insertコード: 追加済み / 不要
+    ```
 
-11. **Prompt for next action with AskUserQuestion**
-    After displaying report, use AskUserQuestion:
-    - question: "別の関数を確認しますか？"
-    - header: "Next"
-    - multiSelect: false
-    - options:
-      - label: "はい", description: "別の関数を選択して検証を続ける"
-      - label: "いいえ", description: "検証を終了する"
+   C. Proceed to next chain automatically (no user interaction)
+      - If i < N: continue to next chain (repeat from step 6.A)
+      - If i = N: proceed to final summary
 
-    - If "はい" selected: return to step 4 (Phase 2)
-    - If "いいえ" selected: exit with "検証情報の出力を完了しました"
+### Phase 4: Final Summary
+
+12. **Output final summary report**
+    After processing all chains, display comprehensive summary:
+
+    ```
+    === 処理完了サマリー ===
+
+    処理したSDK関数: N個
+    - Read操作: X個 (Pre-insertコード追加済み)
+    - Write操作: Y個
+    - Delete操作: Z個 (Pre-insertコード追加済み)
+    - 複数SDK使用: W個
+
+    書き換えたファイル: (unique list)
+    - [file_path_1]
+    - [file_path_2]
+    ...
+
+    データソースモック: 合計M個
+
+    次のステップ:
+    1. git diff で変更内容を確認
+    2. アプリケーションを実行してAWS接続をテスト
+    3. CloudWatchログで各API呼び出しを確認
+    4. 必要に応じてテストデータを調整
+
+    すべての処理が完了しました。
+    ```
 
 ## Output Format
 
-### Initial Function List (Phase 1)
+### Optimal Combination (Phase 1)
 ```
-=== AWS SDK v2を使用している関数一覧 ===
+=== 重複排除と最適化後の組み合わせ ===
 
-検出された関数数: N個
-検出された呼び出しパターン数: M個
+合計SDK関数数: 5個 (重複排除前: 8個のチェーン)
+選択されたチェーン数: 5個
 
 [Sorted by priority: multiple SDK methods first, then by chain length]
 
 1. internal/service/order.go:120 | (*OrderService).Process | DynamoDB + S3 + SES [★ Multiple SDK]
    Chain: main → OrderService.Process → DynamoDB PutItem → S3 PutObject → SES SendEmail (3 SDK methods, 4 hops)
 
-2. internal/gateway/data.go:89 | (*DataGateway).Import | S3 + DynamoDB [★ Multiple SDK]
+2. internal/gateway/data.go:89 | (*DataGateway).Import | S3 + DynamoDB [★ Multiple SDK] [+1 other chain]
    Chain: handler → ImportService.Run → S3 GetObject → DynamoDB BatchWriteItem (2 SDK methods, 5 hops)
 
-3. internal/repository/user.go:45 | (*UserRepository).Save | DynamoDB PutItem
+3. internal/repository/user.go:45 | (*UserRepository).Save | DynamoDB PutItem [+2 other chains]
    Chain: main → UserUsecase.Create → UserRepository.Save (1 SDK method, 2 hops)
 
 4. internal/gateway/s3.go:120 | (*S3Gateway).Upload | S3 PutObject
    Chain: main → FileService.Process → S3Gateway.Upload (1 SDK method, 2 hops)
 
-5. internal/repository/user.go:45 | (*UserRepository).Save | DynamoDB PutItem
-   Chain: handler → AdminService.Import → UserUsecase.Migrate → UserRepository.Save (1 SDK method, 3 hops)
-...
+5. internal/repository/user.go:89 | (*UserRepository).Get | DynamoDB GetItem
+   Chain: handler → UserService.Fetch → UserRepository.Get (1 SDK method, 3 hops)
+```
+
+### Batch Approval Summary (Phase 2)
+```
+=== バッチ処理する組み合わせ ===
+
+合計SDK関数数: 5個
+- Read操作: 1個
+- Write操作: 3個
+- Delete操作: 0個
+- 複数SDK使用: 2個
+
+処理対象のチェーン:
+1. order.go:120 | Process | DynamoDB + S3 + SES [★]
+2. data.go:89 | Import | S3 + DynamoDB [★] [+1]
+3. user.go:45 | Save | DynamoDB [+2]
+4. s3.go:120 | Upload | S3
+5. user.go:89 | Get | DynamoDB
 ```
 
 ### Detailed Report for Selected Function (Phase 3)
@@ -320,6 +406,41 @@ _, err := client.PutItem(ctx, &dynamodb.PutItemInput{
 - 設定確認: [region/endpoint/認証情報など]
 ```
 
+### Brief Summary (Phase 3, per chain)
+```
+完了 (3/5): internal/repository/user.go
+- AWS操作: Write (PutItem)
+- データソースモック: 2個
+- Pre-insertコード: 不要
+```
+
+### Final Summary (Phase 4)
+```
+=== 処理完了サマリー ===
+
+処理したSDK関数: 5個
+- Read操作: 1個 (Pre-insertコード追加済み)
+- Write操作: 3個
+- Delete操作: 0個
+- 複数SDK使用: 2個
+
+書き換えたファイル:
+- internal/service/order.go
+- internal/gateway/data.go
+- internal/repository/user.go
+- internal/gateway/s3.go
+
+データソースモック: 合計8個
+
+次のステップ:
+1. git diff で変更内容を確認
+2. アプリケーションを実行してAWS接続をテスト
+3. CloudWatchログで各API呼び出しを確認
+4. 必要に応じてテストデータを調整
+
+すべての処理が完了しました。
+```
+
 ## Analysis Requirements
 
 ### General
@@ -341,19 +462,26 @@ _, err := client.PutItem(ctx, &dynamodb.PutItemInput{
   - Add comment: "// Pre-insert: test data for [operation_name]"
 - Use `<details>` tags for readability
 
-### Interactive UX
-- Use AskUserQuestion for all user interactions
-- Present up to 4 call chains per selection (sorted by execution ease)
-- Include pagination option if more than 4 chains available
-- Allow multiple function analysis in single session
-- Confirm before looping with AskUserQuestion
+### Batch Processing UX
+- Phase 1: Extract and deduplicate automatically
+- Phase 2: Single batch approval via AskUserQuestion
+- Phase 3: Process all chains automatically without user interaction
+- Phase 4: Display final summary
+- No interactive loop - fully automated after approval
 
 ## Notes
 
 - Stop immediately if branch diff does not contain `aws-sdk-go-v2` imports
-- Use Task tool for code analysis (steps 2, 6, 7, 8)
-- Use Edit tool to automatically apply code modifications (step 9)
-- Cache function list and call chains from step 3 for reuse in Phase 4 loop
+- Use Task tool for code analysis (steps 2, 3, 7, 8, 9)
+- Use Edit tool to automatically apply code modifications (step 10)
+- **Deduplication** (step 3):
+  - Group chains by unique SDK function (file:line + function + operation)
+  - Select representative chain from each group (shortest hops, main entry point)
+  - Mark with [+N other chains] indicator
+- **Batch processing** (Phase 3):
+  - Process all chains in optimal combination sequentially
+  - Display progress for each chain (i/N)
+  - No user interaction during processing
 - Sort call chains by priority:
   1. Chains with multiple AWS SDK methods (higher priority/重要度高)
   2. Within same SDK method count: shorter chains first (easier execution)
@@ -361,14 +489,15 @@ _, err := client.PutItem(ctx, &dynamodb.PutItemInput{
 - Mark chains with multiple SDK methods with [★ Multiple SDK] indicator
 - Include file:line references in all outputs for navigation
 - Provide complete call chains for traceability
-- Identify AWS operation type (Read/Delete/Write) in step 6
+- Identify AWS operation type (Read/Delete/Write) in step 7
 - Focus on connection configuration (client, endpoints, regions)
-- Automatically replace data source access with test data (step 9 Part A)
+- Automatically replace data source access with test data (step 10 Part A)
 - Mock only data source access (repository, DB, API, file)
 - For AWS Read/Delete operations:
-  - Generate pre-insert code to populate test data (step 8 Part B)
-  - Automatically insert pre-insert code before AWS SDK operation (step 9 Part B)
+  - Generate pre-insert code to populate test data (step 9 Part B)
+  - Automatically insert pre-insert code before AWS SDK operation (step 10 Part B)
   - Enables testing of read/delete operations with pre-populated data
 - Keep AWS SDK v2 calls active to test against real AWS
 - Preserve all business logic between data fetch and AWS call
 - Show git diff after modifications to verify changes
+- Display final summary with statistics after all processing complete
