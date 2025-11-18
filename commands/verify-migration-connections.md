@@ -54,17 +54,32 @@ Output language: Japanese, formal business tone
 3. **Group and deduplicate chains with Task tool** (subagent_type=general-purpose)
    Task prompt: "Group and deduplicate call chains to create optimal combination:
 
-   Step 1: Group by unique SDK function
-   - Key: file_path:line_number + function_name + SDK_operation
-   - Value: list of call chains targeting same SDK function
-   - Example: all chains to 'internal/repository/user.go:45 | Save | DynamoDB PutItem' are grouped
+   Step 1: Group by SDK operation type (動作確認の観点)
+   - Key: AWS_service + SDK_operation
+   - Value: list of call chains using same SDK operation
+   - Example: all chains using 'DynamoDB PutItem' are grouped together
+   - Ignore: file path, line number, function name, region, endpoint, table/bucket names, filters, and all parameters
+   - Rationale: From operation verification perspective, only AWS service type and SDK operation matter
+
+   Examples of grouping:
+   ```
+   Same group (same S3 GetObject):
+   - s3.go:45 | DownloadFromBucketA | S3 GetObject (bucket: bucket-a)
+   - s3.go:89 | DownloadFromBucketB | S3 GetObject (bucket: bucket-b)
+   → Only verify one
+
+   Same group (same DynamoDB Query):
+   - user.go:30 | GetByStatus | DynamoDB Query (filter: status)
+   - user.go:60 | GetByAge | DynamoDB Query (filter: age)
+   → Only verify one
+   ```
 
    Step 2: Select representative chain from each group
    For each group with multiple chains:
    - Priority 1: Shortest chain (fewest hops)
    - Priority 2: Entry point is 'main' function
    - Priority 3: First in list (tie-breaker)
-   - Mark selected chain with: [+N other chains] where N = group size - 1
+   - Mark selected chain with: [+N other operations] where N = group size - 1
 
    For groups with single chain:
    - Select the only chain
@@ -73,7 +88,7 @@ Output language: Japanese, formal business tone
    Step 3: Create optimal combination
    - Combine all selected representative chains
    - Maintain original priority sorting (from step 2)
-   - Result: minimal set covering all unique SDK functions
+   - Result: minimal set covering all unique SDK operation types
 
    Return: optimal combination (deduplicated chains), each with group info"
 
@@ -475,9 +490,11 @@ _, err := client.PutItem(ctx, &dynamodb.PutItemInput{
 - Use Task tool for code analysis (steps 2, 3, 7, 8, 9)
 - Use Edit tool to automatically apply code modifications (step 10)
 - **Deduplication** (step 3):
-  - Group chains by unique SDK function (file:line + function + operation)
+  - Group chains by SDK operation type (AWS_service + SDK_operation)
+  - Ignore: file path, line number, function name, region, endpoint, table/bucket names, filters, and all parameters
+  - From operation verification perspective (動作確認の観点): same AWS service + same SDK operation = same verification
   - Select representative chain from each group (shortest hops, main entry point)
-  - Mark with [+N other chains] indicator
+  - Mark with [+N other operations] indicator
 - **Batch processing** (Phase 3):
   - Process all chains in optimal combination sequentially
   - Display progress for each chain (i/N)
