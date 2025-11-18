@@ -100,17 +100,25 @@ Output language: Japanese, formal business tone
 6. **Analyze selected function with Task tool** (subagent_type=general-purpose)
    Task prompt: "For function [function_name] at [file_path:line_number] with call chain [selected_chain]:
 
-   1. Extract AWS settings from [function_name] using Read:
+   1. Identify AWS SDK operation type using Read:
+      - Find AWS SDK v2 client method calls: `client\.GetItem`, `client\.PutItem`, etc.
+      - Classify operation type:
+        - Read operations: GetItem, GetObject, DescribeTable, etc.
+        - Delete operations: DeleteItem, DeleteObject, etc.
+        - Write operations: PutItem, PutObject, UpdateItem, etc.
+      - Extract operation name and line number
+
+   2. Extract AWS settings from [function_name] using Read:
       - Region: look for `WithRegion\|AWS_REGION`
       - Resource: table name, bucket name from client call parameters
       - Endpoint: look for `WithEndpointResolver\|endpoint`
 
-   2. Document v1 → v2 changes from git diff:
+   3. Document v1 → v2 changes from git diff:
       - Client init: session.New vs config.LoadDefaultConfig
       - API call: old vs new method signature
       - Type changes: aws.String vs direct string usage
 
-   Return: AWS settings, migration summary. Use [selected_chain] as call chain (do not re-trace)."
+   Return: AWS operation type (Read/Delete/Write), operation name, line number, AWS settings, migration summary. Use [selected_chain] as call chain (do not re-trace)."
 
 7. **Identify data source access with Task tool** (subagent_type=general-purpose)
    Task prompt: "In function [function_name] at [file_path:line_number], identify ALL data source access BEFORE AWS SDK calls using Read:
@@ -130,10 +138,11 @@ Output language: Japanese, formal business tone
 
    Return: list with line numbers, calls, variables, types."
 
-8. **Generate test data with Task tool** (subagent_type=general-purpose)
-   Task prompt: "For each data source access from step 7, generate test data and code modification:
+8. **Generate test data and pre-insert code with Task tool** (subagent_type=general-purpose)
+   Task prompt: "Generate test data and code modifications:
 
-   For each access:
+   Part A - Data source access replacement (from step 7):
+   For each data source access:
    1. Create test data matching return type:
       - Struct: `&StructName{Field: \"value\", ...}` (use realistic values)
       - Slice: `[]Type{elem1, elem2}`
@@ -145,25 +154,53 @@ Output language: Japanese, formal business tone
       - Comment out original call with `//`
       - Assign test data to same variable
       - Preserve all downstream logic
-      - If AWS operation is Get/Delete: provide pre-insert code block
 
-   Return: original code (commented), test assignment code, pre-insert code (if needed)."
+   Part B - AWS SDK pre-insert code (from step 6):
+   If AWS operation type is Read or Delete:
+   1. Generate pre-insert code to populate test data:
+      - For GetItem: generate PutItem with same key
+      - For GetObject: generate PutObject with same key
+      - For DeleteItem: generate PutItem with same key
+      - Use same resource (table/bucket) from step 6
+      - Use realistic test data values
+
+   2. Identify insertion point:
+      - Line number just before AWS SDK Read/Delete operation
+      - Preserve indentation
+
+   Return:
+   - Data source replacements: [original code (commented), test assignment code]
+   - Pre-insert code (if AWS operation is Read/Delete): [pre-insert code, insertion line number]"
 
 9. **Apply code modifications with Edit tool**
+
+   Part A - Replace data source access (from step 8 Part A):
    For each data source access identified in step 7:
    - Use Edit tool to replace original data source call with test data
    - old_string: exact original code from function
    - new_string: test data assignment preserving downstream logic
    - If multiple data sources: apply edits sequentially
-   - Output: "書き換え完了: [file_path:line_number]"
+   - Output: "データソース書き換え完了: [file_path:line_number]"
+
+   Part B - Insert pre-insert code (from step 8 Part B):
+   If AWS operation type is Read or Delete:
+   - Use Edit tool to insert pre-insert code before AWS SDK operation
+   - Identify the line before AWS SDK call using line number from step 8
+   - old_string: line before AWS SDK operation (preserve exact indentation)
+   - new_string: line before AWS SDK operation + "\n" + pre-insert code (with proper indentation)
+   - Output: "Pre-insertコード追加: [file_path:line_number]"
+   - Add comment above pre-insert code: "// Pre-insert: test data for [operation_name]"
 
 10. **Output detailed report**
     Generate report for selected function with:
     - File path and function name
     - Complete call chain
+    - AWS operation type (Read/Delete/Write) and operation name
     - AWS service and resource details
     - Migration changes summary
-    - Applied code modifications (show what was changed)
+    - Applied code modifications:
+      - Data source replacements (if any)
+      - Pre-insert code (if AWS operation is Read/Delete)
     - AWS console verification steps
     - Git diff summary showing changes
 
@@ -216,12 +253,15 @@ Output language: Japanese, formal business tone
 ### ファイル: [file_path:line_number]
 #### 関数/メソッド: [function_name]
 
+**AWS操作タイプ**: [Read/Delete/Write]
+**AWS操作名**: [operation_name] (例: GetItem, PutItem, DeleteObject)
+
 **呼び出しチェーン**:
 ```
 [entry_point] (例: cmd/main.go:main())
   → [usecase/service_layer] (例: internal/usecase/user.go:(*UserUsecase).MigrateUser())
   → [repository/gateway_layer] (例: internal/repository/user.go:(*UserRepository).FetchByID())
-  → AWS SDK v2 API呼び出し (例: DynamoDB PutItem)
+  → AWS SDK v2 API呼び出し (例: DynamoDB GetItem)
 ```
 
 **使用サービス**: [AWS Service Name (DynamoDB, S3, SES, etc.)]
@@ -237,7 +277,9 @@ Output language: Japanese, formal business tone
 - コンテキスト: [context propagation changes]
 - 型変更: [type changes if any]
 
-**データソースのモック方法**:
+**適用したコード変更**:
+
+**A. データソースのモック** (該当する場合):
 <details>
 <summary>元のコード</summary>
 
@@ -251,6 +293,24 @@ Output language: Japanese, formal business tone
 
 ```go
 // Test data assignment code
+```
+</details>
+
+**B. Pre-insertコード** (AWS操作がRead/Deleteの場合):
+<details>
+<summary>追加されたPre-insertコード</summary>
+
+```go
+// Pre-insert: test data for [operation_name]
+// [pre-insert code that populates test data]
+// Example for GetItem:
+_, err := client.PutItem(ctx, &dynamodb.PutItemInput{
+    TableName: aws.String("users"),
+    Item: map[string]types.AttributeValue{
+        "id": &types.AttributeValueMemberS{Value: "test-123"},
+        "name": &types.AttributeValueMemberS{Value: "Test User"},
+    },
+})
 ```
 </details>
 
@@ -275,7 +335,10 @@ Output language: Japanese, formal business tone
 - Comment out error handling for test data
 - Preserve indentation in code blocks
 - Match variable names exactly from original code
-- For AWS Get/Delete: provide separate pre-insert code block
+- For AWS Read/Delete operations:
+  - Generate pre-insert code to populate test data (e.g., PutItem before GetItem)
+  - Automatically insert pre-insert code before AWS SDK operation
+  - Add comment: "// Pre-insert: test data for [operation_name]"
 - Use `<details>` tags for readability
 
 ### Interactive UX
@@ -298,10 +361,14 @@ Output language: Japanese, formal business tone
 - Mark chains with multiple SDK methods with [★ Multiple SDK] indicator
 - Include file:line references in all outputs for navigation
 - Provide complete call chains for traceability
+- Identify AWS operation type (Read/Delete/Write) in step 6
 - Focus on connection configuration (client, endpoints, regions)
-- Automatically replace data source access with test data
+- Automatically replace data source access with test data (step 9 Part A)
 - Mock only data source access (repository, DB, API, file)
+- For AWS Read/Delete operations:
+  - Generate pre-insert code to populate test data (step 8 Part B)
+  - Automatically insert pre-insert code before AWS SDK operation (step 9 Part B)
+  - Enables testing of read/delete operations with pre-populated data
 - Keep AWS SDK v2 calls active to test against real AWS
 - Preserve all business logic between data fetch and AWS call
-- For Get/Delete operations: provide both pre-insert and execution code
 - Show git diff after modifications to verify changes
