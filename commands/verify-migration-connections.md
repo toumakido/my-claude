@@ -5,7 +5,7 @@ Output language: Japanese, formal business tone
 ## Prerequisites
 
 - gh CLI installed and authenticated
-- fzf installed for interactive selection
+- peco installed for interactive selection
 - $ARGUMENTS: PR number
 - Run from repository root
 - PR must contain AWS SDK Go migration changes
@@ -27,7 +27,7 @@ Output language: Japanese, formal business tone
      - AWS service type (DynamoDB, S3, SES, etc.)
      - Brief AWS operation description (PutItem, GetObject, etc.)
 
-3. **Format function list for fzf**
+3. **Format function list for peco**
    Create entries in format:
    ```
    <file_path>:<line_number> | <function_name> | <AWS_Service> <Operation>
@@ -52,7 +52,7 @@ Output language: Japanese, formal business tone
 4. **Present selection UI**
    ```bash
    echo "関数を選択してください (Ctrl-C で終了):"
-   echo "<formatted_list>" | fzf --prompt="関数を選択> " --height=40% --layout=reverse --border
+   echo "<formatted_list>" | peco --prompt "関数を選択> "
    ```
 
 5. **Handle selection**
@@ -183,7 +183,7 @@ internal/gateway/s3.go:120 | (*S3Gateway).Upload | S3 PutObject
   - Client method calls: `client.PutItem`, `client.GetObject`, etc.
 - Group by file and extract function signatures
 - Identify AWS service from import path or client type
-- Format for easy scanning in fzf selection
+- Format for easy scanning in peco selection
 
 ### Single Function Analysis (Phase 3)
 - Focus on production AWS connections (exclude localhost/test endpoints)
@@ -221,7 +221,7 @@ internal/gateway/s3.go:120 | (*S3Gateway).Upload | S3 PutObject
 - Use `<details>` tags for better readability
 
 ### Interactive UX (Phase 2 & 4)
-- Use fzf for smooth selection experience
+- Use peco for smooth selection experience
 - Clear prompts in Japanese
 - Handle Ctrl-C gracefully
 - Allow easy navigation between multiple functions
@@ -234,12 +234,12 @@ internal/gateway/s3.go:120 | (*S3Gateway).Upload | S3 PutObject
 - Use Task tool for all code analysis (avoid manual grep/read)
 - Cache initial function list to avoid re-analyzing on each loop iteration
 - Include file:line references for easy navigation
-- If fzf is not installed, provide clear error with installation instructions
+- If peco is not installed, provide clear error with installation instructions
 - Handle edge cases: no functions found, invalid selection, etc.
 
 ### Interactive Flow
 - Phase 1: Extract all functions once (cached for loop)
-- Phase 2: User selects function via fzf
+- Phase 2: User selects function via peco
 - Phase 3: Detailed analysis for selected function only
 - Phase 4: Loop back or exit
 - Keep analysis context between iterations for performance
