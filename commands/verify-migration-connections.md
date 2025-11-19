@@ -49,6 +49,7 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
    - Build complete chains: entry → intermediate → SDK function
    - For each chain, count all AWS SDK v2 method calls within the chain
    - Mark chains with multiple SDK methods as high priority
+   - Execute Grep searches in parallel for independent functions
 
    Step 3: Sort call chains by priority:
    1. First: Chains with multiple AWS SDK methods (higher priority)
@@ -193,9 +194,9 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
 
    Purpose: Avoid functional duplication in test data across multiple handlers
 
-   1. Extract FilterExpression from AWS SDK Read operation using Read:
-      - Search for `FilterExpression:` in Scan/Query input parameters
-      - Extract complete filter string and parameter values
+   1. Extract FilterExpression from AWS SDK Read operation:
+      - Use Read to search for `FilterExpression:` within [function_name] scope
+      - Extract complete filter string and parameter values from Scan/Query input parameters
       - Example: `FilterExpression: \"(attribute_not_exists(#OP) OR attribute_type(#OP, :null)) AND (#RT = :rt)\"`
 
    2. Categorize filter complexity:
@@ -206,17 +207,17 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
    3. Identify filter pattern:
       - Extract filter structure (ignore parameter values)
       - Example pattern: `(attribute_not_exists(X) OR attribute_type(X, :null)) AND (Y = :value)`
-      - Compare with filters from other handlers in optimal combination
+      - Compare with filters from other functions in optimal combination
 
    4. Determine test data strategy:
       - If this is the FIRST occurrence of this filter pattern: **Comprehensive testing**
         - Generate both matching and non-matching test records
         - Test all filter condition branches (OR, AND, attribute_not_exists, etc.)
-      - If this filter pattern already tested by another handler: **Minimal or skip**
-        - Skip Pre-insert (rely on other handler's filter testing)
-        - Or generate minimal records for handler-specific processing only
+      - If this filter pattern already tested by another function: **Minimal or skip**
+        - Skip Pre-insert (rely on other function's filter testing)
+        - Or generate minimal records for function-specific processing only
       - If complex filter (3+ conditions): **Always test comprehensively**
-        - Regardless of other handlers
+        - Regardless of other functions
       - If no filter: **Basic SDK operation testing**
         - Generate 1-2 matching records only
 
@@ -265,7 +266,7 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
       **Pattern B: Validation function calls**
       - validator.Validate(obj), obj.Validate()
       - Custom validation: ValidateXXX(obj), obj.IsValid()
-      - Check validation rules (read validator definition if needed using Grep + Read)
+      - If validation function found: use Grep + Read to locate and read validator definition
       - Severity: HIGH (causes error return)
       - Example: if err := validator.Validate(acc); err != nil
 
@@ -341,9 +342,10 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
 
    1. Find and read model definition files using Glob + Read:
       - Search for `type.*struct` in `model.go`, `models.go`, `types.go`, `entity.go`, `dto.go`
-      - Search in same directory as [file_path] and parent directories
+      - Search in same directory as [file_path] and parent directories (use parallel Glob searches)
       - Check return types in function signatures
-      - **Important**: Actually READ the model files, do not assume field names or types
+      - After identifying all model files: READ each file before proceeding to step 2
+      - **Critical**: Never assume field names or types - always read actual file contents
 
    2. Extract type information for each data source return type (from step 8):
       - Struct fields and their types (including pointer types: `*string`, `*int64`, `*bool`)
@@ -399,7 +401,7 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
 
    Part A - Data source access replacement (from step 8):
    For each data source access:
-   1. Generate COMPLETE test data prioritizing by field requirements:
+   1. Generate COMPLETE test data (COMPLETE = satisfying all 5 priority levels below) prioritizing by field requirements:
 
       **Priority 1: AWS SDK parameter fields** (from step 7)
       - Fields used in AWS SDK call parameters (e.g., Key, FilterExpression values)
@@ -594,11 +596,12 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
    - Output: "コンパイル成功: [file_path]"
 
    B. Static analysis (if tools available):
-   - Run: `go vet ./... 2>&1` (check for common mistakes including nil pointer issues)
+   - Run go vet and staticcheck in parallel (independent checks):
+     - `go vet ./... 2>&1` (check for common mistakes including nil pointer issues)
+     - `staticcheck ./... 2>&1` if installed (advanced checks)
    - If go vet reports issues in modified files:
      - Analyze warnings (especially nil pointer dereferences, unreachable code)
      - Output: "警告: go vet detected issues: [summary]"
-   - Run: `staticcheck ./... 2>&1` if installed (advanced checks)
    - If staticcheck reports issues in modified files:
      - Output: "警告: staticcheck detected issues: [summary]"
    - Note: Only report issues in files modified by this command, ignore pre-existing issues
@@ -843,87 +846,14 @@ _, err := client.PutItem(ctx, &dynamodb.PutItemInput{
 - Summarize v1 → v2 migration patterns clearly
 - Provide actionable AWS console verification steps
 
-### Test Data and Code Modifications
-
-**Type validation (step 9)**: Extract exact type information from model definitions before generating test data
-- **Important**: Actually READ model files, do not assume field names or types
-- Match struct field names exactly (e.g., `CustomerCode` not `AccountID`)
-- Distinguish pointer types: `*string`, `*int64`, `*bool`
-- Distinguish slice element types: `[]*Type` vs `[]Type`
-- Document pointer allocation patterns (e.g., `aws.String("value")` for `*string` fields)
-- Include all required imports: `aws`, `attributevalue`, service-specific `types`
-- Provide initialization examples for each struct type
-
-**Downstream processing analysis (step 8.5)**: Identify all field requirements to prevent runtime errors
-- **Purpose**: Ensure test data is complete enough to avoid panics, validation failures, and logic errors
-- Analyze code AFTER AWS SDK calls to find:
-  - CRITICAL fields: Nil pointer dereference, function args that don't handle nil, slice iteration
-  - HIGH fields: Validation requirements (struct tags, Validate() methods)
-  - MEDIUM fields: Business logic checks (length, range, format)
-  - OPTIONAL fields: Safe nil handling with fallbacks
-- Extract validation rules from struct tags: `validate:"required"`, `validate:"min=X,max=Y"`, etc.
-- Find and read Validate() method implementations if they exist
-- Build comprehensive field requirement map with severity levels and reasons
-
-**Filter condition analysis (step 7.5)**: Avoid functional duplication in test data
-- Extract FilterExpression from Scan/Query operations
-- Categorize filter complexity (simple, complex, none)
-- Identify filter patterns (structure, not parameter values)
-- Determine test data strategy:
-  - Comprehensive testing: First occurrence of filter pattern, or complex filters (3+ conditions)
-  - Minimal testing: Filter pattern already tested by another handler
-  - Skip Pre-insert: Rely on other handler's filter testing
-- Document strategy decision and rationale
-
-**Test record generation (step 10 Part B)**: Generate both matching and non-matching records
-- **Matching records**: Should be retrieved by FilterExpression (N records based on strategy)
-- **Non-matching records**: Should be excluded by FilterExpression (M records based on strategy)
-- Test different filter violation patterns:
-  - Wrong parameter values
-  - Non-null values for `attribute_not_exists` checks
-  - Out-of-range values for comparison operators (`<=`, `>=`, `BETWEEN`)
-  - Empty strings for `attribute_type` or `= :empty` checks
-- Add comment documenting expected counts:
-  ```go
-  // Pre-insert: test data for Scan operation
-  // Matching records: 2 (should be retrieved)
-  // Non-matching records: 2 (should be excluded)
-  ```
-
-**Verification logging (step 11 Part C)**: Confirm filter behavior with expected vs actual comparison
-- Log test record counts: `matchCount match (should be retrieved), nonMatchCount non-match (should be excluded)`
-- Log actual retrieved count: `returned N records (expected: matchCount)`
-- Add warning if mismatch: `Filter verification failed: expected X records but got Y`
-- Log retrieved record details for debugging
-
-**Complete test data generation (step 10 Part A)**: Generate data that works for entire function flow
-- **Priority-based field population**:
-  - Priority 1: AWS SDK parameter fields (required for SDK call)
-  - Priority 2: CRITICAL fields (prevents panic)
-  - Priority 3: HIGH fields (satisfies validation)
-  - Priority 4: MEDIUM fields (passes business logic)
-  - Priority 5: OPTIONAL fields (for completeness)
-- Match Go types exactly (structs, slices, maps, primitives, pointers)
-- Initialize slices as non-nil: `[]Type{}` or with elements
-- Use realistic values that satisfy validation rules:
-  - Email format for `validate:"email"` fields
-  - Correct length for `validate:"len=N"` fields
-  - Within range for `validate:"min=X,max=Y"` fields
-- Add comment documenting field requirements and priorities
-- Comment out error handling for test data
-- Preserve indentation in code blocks
-- Match variable names exactly from original code
-- Use `<details>` tags for readability
-
-**Static analysis and runtime safety (step 12)**: Verify code quality beyond compilation
-- Run `go vet` to check for common mistakes (nil pointers, unreachable code)
-- Run `staticcheck` if available for advanced checks
-- Only report issues in modified files (ignore pre-existing issues)
-- Document potential runtime risks that cannot be statically verified:
-  - External function calls with unknown nil handling
-  - Complex validation logic requiring manual review
-  - Dynamic field access (reflection, map lookups)
-- Suggest additional manual testing when risks are identified
+### Critical Process Steps
+Detailed instructions are in Process section above. Key requirements:
+- **Type validation (step 9)**: READ actual model files, never assume field names/types
+- **Downstream analysis (step 8.5)**: Identify CRITICAL/HIGH/MEDIUM/OPTIONAL field requirements
+- **Filter analysis (step 7.5)**: Categorize complexity and determine test data strategy
+- **Test data generation (step 10)**: Generate COMPLETE data satisfying all 5 priority levels
+- **Test records (step 10 Part B)**: Generate BOTH matching and non-matching records for Read/Delete
+- **Static analysis (step 12)**: Run go vet and staticcheck in parallel, document runtime risks
 
 ### Complex Chain Handling
 - **Multiple AWS SDK calls**: Process all SDK calls within the same function
