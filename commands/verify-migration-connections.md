@@ -244,6 +244,96 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
 
    Return: list with line numbers, calls, variables, types."
 
+8.5. **Analyze downstream processing with Task tool** (subagent_type=general-purpose)
+   Task prompt: "Analyze ALL code after AWS SDK calls in [function_name] at [file_path:line_number] to identify required fields:
+
+   Purpose: Ensure test data is complete enough to avoid runtime errors in business logic
+
+   1. Identify AWS SDK call boundaries using Read:
+      - Find AWS SDK method calls: client.GetItem, client.Scan, client.PutItem, etc.
+      - Mark line numbers where AWS SDK operations complete
+      - All code AFTER these lines (in the same function) is \"downstream processing\"
+
+   2. Analyze downstream field usage patterns for ALL variables from data sources (from step 8):
+
+      **Pattern A: Nil pointer dereference**
+      - Direct dereference: *field, field.Method()
+      - Without nil check: if no `field != nil` guard before usage
+      - Severity: CRITICAL (causes panic)
+      - Example: logger.Infof(\"Value: %s\", *acc.BranchCode)
+
+      **Pattern B: Validation function calls**
+      - validator.Validate(obj), obj.Validate()
+      - Custom validation: ValidateXXX(obj), obj.IsValid()
+      - Check validation rules (read validator definition if needed using Grep + Read)
+      - Severity: HIGH (causes error return)
+      - Example: if err := validator.Validate(acc); err != nil
+
+      **Pattern C: Struct tag validation**
+      - Use struct definition from step 9
+      - Extract validation tags: `validate:\"required\"`, `validate:\"min=1,max=100\"`, etc.
+      - Extract json tags: `json:\"field,omitempty\"` → optional, `json:\"field\"` → required
+      - Severity: HIGH (validation will fail)
+
+      **Pattern D: Length/empty checks**
+      - len(field) == 0, len(field) > 0
+      - field == \"\", field != \"\"
+      - strings.TrimSpace(field) == \"\"
+      - Severity: MEDIUM (causes conditional error)
+      - Example: if len(acc.Email) == 0 { return errors.New(...) }
+
+      **Pattern E: Numeric range checks**
+      - field > max, field < min
+      - field >= 0, field <= limit
+      - Severity: MEDIUM (causes conditional error)
+      - Example: if *acc.Balance < 0 { return errors.New(...) }
+
+      **Pattern F: Field used in function calls**
+      - Function arguments: doSomething(obj.Field1, obj.Field2)
+      - Method calls on fields: obj.Field.Method()
+      - External API calls: api.Call(obj.Field)
+      - Severity: depends on function (check if function handles nil/zero values)
+      - Example: score := calculateCredit(acc.CreditHistory, acc.TransactionCount)
+
+      **Pattern G: Loop/iteration on slices**
+      - for _, item := range obj.Items
+      - obj.Items[0], obj.Items[i]
+      - Severity: CRITICAL if slice is nil (panic on nil slice iteration or index access)
+
+   3. For each field usage, determine requirement level:
+      - CRITICAL: Must be non-nil and valid (no nil check, direct dereference, or used in loops)
+      - HIGH: Must satisfy validation rules (validator, struct tags)
+      - MEDIUM: Must pass business logic checks (length, range)
+      - LOW: Used but has nil check or default handling
+      - OPTIONAL: Has nil check and safe fallback
+
+   4. Build field requirement map:
+      - Field name → Requirement level → Reason → Line number(s)
+      - Include both pointer and non-pointer fields
+      - Include nested struct fields if accessed (e.g., obj.Nested.Field)
+      - Include slice fields if iterated or indexed
+      - Example:
+        {
+          \"BranchCode\": \"CRITICAL - Direct dereference at line 45 without nil check\",
+          \"Email\": \"HIGH - Length check at line 52, must be non-empty\",
+          \"Balance\": \"MEDIUM - Range check at line 58, must be >= 0 and <= 10000000\",
+          \"CreditScore\": \"CRITICAL - Used in function call at line 65, function does not handle nil\",
+          \"Transactions\": \"CRITICAL - Iterated in for loop at line 72, must be non-nil slice\",
+        }
+
+   5. Identify validation requirements:
+      - Extract validator rules from struct tags (from step 9)
+      - Find Validate() method implementation (use Grep + Read if exists)
+      - Document expected value formats/ranges
+      - Example:
+        {
+          \"Email\": \"validate:\\\"required,email\\\" - must be valid email format\",
+          \"PhoneNumber\": \"validate:\\\"required,len=13\\\" - must be exactly 13 characters\",
+          \"Age\": \"validate:\\\"min=0,max=150\\\" - must be between 0 and 150\",
+        }
+
+   Return: Field requirement map with levels, reasons, line numbers, and validation rules."
+
 9. **Validate and extract type information with Task tool** (subagent_type=general-purpose)
    Task prompt: "Before generating test data, extract and validate type information from model definitions:
 
@@ -305,29 +395,88 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
    - Initialization examples for each struct type"
 
 10. **Generate test data and pre-insert code with Task tool** (subagent_type=general-purpose)
-   Task prompt: "Generate test data and code modifications using validated type information from step 9:
+   Task prompt: "Generate test data and code modifications using validated type information from step 9 and field requirements from step 8.5:
 
    Part A - Data source access replacement (from step 8):
    For each data source access:
-   1. Use exact type information from step 9:
+   1. Generate COMPLETE test data prioritizing by field requirements:
+
+      **Priority 1: AWS SDK parameter fields** (from step 7)
+      - Fields used in AWS SDK call parameters (e.g., Key, FilterExpression values)
+      - Must be set with realistic values
+
+      **Priority 2: CRITICAL fields** (from step 8.5)
+      - Nil pointer dereference without guards
+      - Fields used in function calls where nil causes panic
+      - Slice fields that are iterated or indexed
+      - Must be non-nil with realistic values
+
+      **Priority 3: HIGH fields** (from step 8.5)
+      - Fields with validation requirements (struct tags, Validate() methods)
+      - Must satisfy all validation rules:
+        - `validate:\"required\"` → non-nil, non-empty
+        - `validate:\"email\"` → valid email format
+        - `validate:\"min=X,max=Y\"` → within range
+        - `validate:\"len=N\"` → exactly N characters/elements
+
+      **Priority 4: MEDIUM fields** (from step 8.5)
+      - Fields with business logic checks (length, range, format)
+      - Must satisfy conditions to avoid error returns
+
+      **Priority 5: OPTIONAL fields**
+      - Fields with safe nil handling or default fallbacks
+      - Set for completeness but not critical
+
+   2. Use exact type information from step 9:
       - Match struct field names exactly (e.g., `CustomerCode` not `AccountID`)
-      - Use pointer types where required: `aws.String(\"value\")`, `aws.Int64(123)`
+      - Use pointer types where required: `aws.String(\"value\")`, `aws.Int64(123)`, `aws.Bool(true)`
+      - Initialize slices as non-nil: `[]Type{}` or `[]*Type{{...}}`
       - Match slice element types: `[]*Type` vs `[]Type`
       - Example for Account struct:
         ```go
-        // From step 9: type Account struct { BranchCode string; CustomerCode string; Balance *int64 }
+        // From step 9: type Account struct {
+        //   BranchCode *string `validate:\"required\"`
+        //   CustomerCode string `validate:\"required,len=6\"`
+        //   Email string `validate:\"required,email\"`
+        //   Balance *int64 `validate:\"min=0,max=10000000\"`
+        //   Transactions []*Transaction
+        // }
+
         testAccount := &Account{
-            BranchCode:   \"100\",
-            CustomerCode: \"123456\", // Not AccountID
-            Balance:      aws.Int64(1000000),
+            // Priority 1: AWS SDK parameter
+            CustomerCode: \"123456\", // Used in DynamoDB Key
+
+            // Priority 2: CRITICAL fields
+            BranchCode: aws.String(\"100\"), // Dereferenced at line 45
+            Transactions: []*Transaction{   // Iterated at line 72
+                {ID: \"tx-001\", Amount: aws.Int64(5000)},
+            },
+
+            // Priority 3: HIGH fields (validation)
+            Email: \"test@example.com\", // validate:\"required,email\"
+
+            // Priority 4: MEDIUM fields (business logic)
+            Balance: aws.Int64(1000000), // Range check at line 58: 0 <= x <= 10000000
+
+            // Priority 5: OPTIONAL fields
+            // (none in this example)
         }
         ```
 
-   2. Include all required imports in new_string:
+   3. Add comment documenting field requirements:
+      ```go
+      // Test data for [function_name]
+      // AWS SDK fields: CustomerCode
+      // CRITICAL fields: BranchCode (deref:45), Transactions (loop:72)
+      // Validation fields: Email (required,email)
+      // Business logic: Balance (range:0-10000000)
+      ```
+
+   4. Include all required imports in new_string:
       - Add missing imports from step 9 to import block
       - Example: `\"github.com/aws/aws-sdk-go-v2/aws\"`, `\"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue\"`
 
-   3. Generate code modification:
+   5. Generate code modification:
       - Comment out original call with `//`
       - Assign test data to same variable
       - Preserve all downstream logic
@@ -433,7 +582,9 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
    - Include matchCount and nonMatchCount as constants in the code (from step 10)
    - Output: "検証ログ追加: [file_path:line_number]"
 
-12. **Verify compilation with Bash tool**
+12. **Verify compilation and runtime safety with Bash tool**
+
+   A. Compile check:
    - Run: `go build -o /tmp/test-build 2>&1`
    - If compilation fails:
      - Analyze error messages
@@ -441,6 +592,30 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
      - Retry Edit tool with corrections
      - Repeat until compilation succeeds
    - Output: "コンパイル成功: [file_path]"
+
+   B. Static analysis (if tools available):
+   - Run: `go vet ./... 2>&1` (check for common mistakes including nil pointer issues)
+   - If go vet reports issues in modified files:
+     - Analyze warnings (especially nil pointer dereferences, unreachable code)
+     - Output: "警告: go vet detected issues: [summary]"
+   - Run: `staticcheck ./... 2>&1` if installed (advanced checks)
+   - If staticcheck reports issues in modified files:
+     - Output: "警告: staticcheck detected issues: [summary]"
+   - Note: Only report issues in files modified by this command, ignore pre-existing issues
+
+   C. Document potential runtime risks:
+   - Review field requirement map from step 8.5
+   - Identify fields marked as CRITICAL or HIGH that may still cause issues:
+     - Fields used in external function calls (depends on function implementation)
+     - Complex validation logic that cannot be fully analyzed
+     - Dynamic field access (reflection, map lookups)
+   - If potential risks exist, output warning:
+     ```
+     潜在的なランタイムリスク:
+     - [function_name] at line X: [field_name] used in external call [function_call]
+     - Recommendation: Verify [function_call] handles nil/zero values correctly
+     ```
+   - Suggest additional manual testing if needed
 
 13. **Output detailed report**
     Generate report for selected function with:
@@ -679,6 +854,17 @@ _, err := client.PutItem(ctx, &dynamodb.PutItemInput{
 - Include all required imports: `aws`, `attributevalue`, service-specific `types`
 - Provide initialization examples for each struct type
 
+**Downstream processing analysis (step 8.5)**: Identify all field requirements to prevent runtime errors
+- **Purpose**: Ensure test data is complete enough to avoid panics, validation failures, and logic errors
+- Analyze code AFTER AWS SDK calls to find:
+  - CRITICAL fields: Nil pointer dereference, function args that don't handle nil, slice iteration
+  - HIGH fields: Validation requirements (struct tags, Validate() methods)
+  - MEDIUM fields: Business logic checks (length, range, format)
+  - OPTIONAL fields: Safe nil handling with fallbacks
+- Extract validation rules from struct tags: `validate:"required"`, `validate:"min=X,max=Y"`, etc.
+- Find and read Validate() method implementations if they exist
+- Build comprehensive field requirement map with severity levels and reasons
+
 **Filter condition analysis (step 7.5)**: Avoid functional duplication in test data
 - Extract FilterExpression from Scan/Query operations
 - Categorize filter complexity (simple, complex, none)
@@ -710,13 +896,34 @@ _, err := client.PutItem(ctx, &dynamodb.PutItemInput{
 - Add warning if mismatch: `Filter verification failed: expected X records but got Y`
 - Log retrieved record details for debugging
 
-**General**:
+**Complete test data generation (step 10 Part A)**: Generate data that works for entire function flow
+- **Priority-based field population**:
+  - Priority 1: AWS SDK parameter fields (required for SDK call)
+  - Priority 2: CRITICAL fields (prevents panic)
+  - Priority 3: HIGH fields (satisfies validation)
+  - Priority 4: MEDIUM fields (passes business logic)
+  - Priority 5: OPTIONAL fields (for completeness)
 - Match Go types exactly (structs, slices, maps, primitives, pointers)
-- Include all fields used in downstream logic
+- Initialize slices as non-nil: `[]Type{}` or with elements
+- Use realistic values that satisfy validation rules:
+  - Email format for `validate:"email"` fields
+  - Correct length for `validate:"len=N"` fields
+  - Within range for `validate:"min=X,max=Y"` fields
+- Add comment documenting field requirements and priorities
 - Comment out error handling for test data
 - Preserve indentation in code blocks
 - Match variable names exactly from original code
 - Use `<details>` tags for readability
+
+**Static analysis and runtime safety (step 12)**: Verify code quality beyond compilation
+- Run `go vet` to check for common mistakes (nil pointers, unreachable code)
+- Run `staticcheck` if available for advanced checks
+- Only report issues in modified files (ignore pre-existing issues)
+- Document potential runtime risks that cannot be statically verified:
+  - External function calls with unknown nil handling
+  - Complex validation logic requiring manual review
+  - Dynamic field access (reflection, map lookups)
+- Suggest additional manual testing when risks are identified
 
 ### Complex Chain Handling
 - **Multiple AWS SDK calls**: Process all SDK calls within the same function
@@ -744,17 +951,18 @@ _, err := client.PutItem(ctx, &dynamodb.PutItemInput{
 
 ### Tool Usage
 - Stop immediately if branch diff does not contain `aws-sdk-go-v2` imports
-- Use Task tool for code analysis (steps 2, 3, 7, 7.5, 8, 9, 10)
+- Use Task tool for code analysis (steps 2, 3, 7, 7.5, 8, 8.5, 9, 10)
 - Use Edit tool to automatically apply code modifications (step 11)
-- Use Bash tool for compilation verification (step 12)
+- Use Bash tool for compilation and static analysis (step 12)
 
 ### Key Process Steps
 - **Deduplication** (step 3): Group by AWS_service + SDK_operation, ignore parameters. Select shortest chain from each group.
 - **Filter analysis** (step 7.5): Categorize filter complexity and determine test data strategy (comprehensive/minimal/skip) to avoid duplication.
-- **Type validation** (step 9): Actually READ model files. Extract exact field names, pointer types, slice types, struct tags.
-- **Test data generation** (step 10): Generate BOTH matching and non-matching records for Read/Delete operations.
+- **Downstream processing analysis** (step 8.5): Analyze code AFTER AWS SDK calls to identify field requirements (CRITICAL/HIGH/MEDIUM/OPTIONAL) and prevent runtime errors.
+- **Type validation** (step 9): Actually READ model files. Extract exact field names, pointer types, slice types, struct tags, validation rules.
+- **Test data generation** (step 10): Generate COMPLETE test data satisfying all field requirements (AWS SDK + downstream processing). Generate BOTH matching and non-matching records for Read/Delete operations.
 - **Code modifications** (step 11): Replace data sources, insert pre-insert code, add verification logging.
-- **Compilation verification** (step 12): Run `go build`, fix errors automatically, retry until success.
+- **Compilation and safety verification** (step 12): Run `go build`, fix errors automatically. Run `go vet` and `staticcheck` for static analysis. Document potential runtime risks.
 
 ### Output Guidelines
 - Include file:line references for navigation
