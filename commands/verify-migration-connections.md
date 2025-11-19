@@ -163,7 +163,7 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
    関数: [file_path:line_number] | [function_name] | [operations]
    ```
 
-   B. Execute steps 7-11 for current chain
+   B. Execute steps 7-14 for current chain
 
 7. **Analyze selected function with Task tool** (subagent_type=general-purpose)
    Task prompt: "For function [function_name] at [file_path:line_number] with call chain [selected_chain]:
@@ -742,53 +742,25 @@ _, err := client.PutItem(ctx, &dynamodb.PutItemInput{
 
 ## Notes
 
+### Tool Usage
 - Stop immediately if branch diff does not contain `aws-sdk-go-v2` imports
 - Use Task tool for code analysis (steps 2, 3, 7, 7.5, 8, 9, 10)
 - Use Edit tool to automatically apply code modifications (step 11)
 - Use Bash tool for compilation verification (step 12)
-- **Deduplication** (step 3):
-  - Group chains by SDK operation type (AWS_service + SDK_operation)
-  - Ignore: file path, line number, function name, region, endpoint, table/bucket names, filters, and all parameters
-  - From operation verification perspective (動作確認の観点): same AWS service + same SDK operation = same verification
-  - Select representative chain from each group (shortest hops, main entry point)
-  - Mark with [+N other operations] indicator
-- **Batch processing** (Phase 3):
-  - Process all chains in optimal combination sequentially
-  - Display progress for each chain (i/N)
-  - No user interaction during processing
-- Sort call chains by priority:
-  1. Chains with multiple AWS SDK methods (higher priority/重要度高)
-  2. Within same SDK method count: shorter chains first (easier execution)
-- Present call chains with SDK method count and hop counts
-- Mark chains with multiple SDK methods with [★ Multiple SDK] indicator
-- Include file:line references in all outputs for navigation
+
+### Key Process Steps
+- **Deduplication** (step 3): Group by AWS_service + SDK_operation, ignore parameters. Select shortest chain from each group.
+- **Filter analysis** (step 7.5): Categorize filter complexity and determine test data strategy (comprehensive/minimal/skip) to avoid duplication.
+- **Type validation** (step 9): Actually READ model files. Extract exact field names, pointer types, slice types, struct tags.
+- **Test data generation** (step 10): Generate BOTH matching and non-matching records for Read/Delete operations.
+- **Code modifications** (step 11): Replace data sources, insert pre-insert code, add verification logging.
+- **Compilation verification** (step 12): Run `go build`, fix errors automatically, retry until success.
+
+### Output Guidelines
+- Include file:line references for navigation
 - Provide complete call chains for traceability
-- Identify AWS operation type (Read/Delete/Write) in step 7
-- Focus on connection configuration (client, endpoints, regions)
-- **Filter condition analysis and test data strategy** (step 7.5):
-  - Extract FilterExpression from Scan/Query operations
-  - Categorize filter complexity (simple, complex, none)
-  - Identify filter patterns to avoid functional duplication
-  - Determine comprehensive/minimal/skip strategy for each handler
-- **Type validation and test data generation**:
-  - Extract exact type information in step 9 (field names, pointer types, slice types, struct tags)
-  - Actually READ model files, do not assume field names or types
-  - Generate test data with correct types in step 10 Part A
-  - Include required imports (aws, attributevalue, types)
-- Automatically replace data source access with test data (step 11 Part A)
-- Mock only data source access (repository, DB, API, file)
-- For AWS Read/Delete operations:
-  - Generate BOTH matching and non-matching test records (step 10 Part B)
-  - Use test data strategy from step 7.5 to determine record counts
-  - Automatically insert pre-insert code before AWS SDK operation (step 11 Part B)
-  - Add verification logging with expected vs actual comparison (step 11 Part C)
-  - Enables testing of read/delete operations with pre-populated data and filter verification
-- **Compilation verification** (step 12):
-  - Run `go build` after code modifications
-  - Fix compilation errors automatically (imports, types, fields)
-  - Retry until compilation succeeds
-- Keep AWS SDK v2 calls active to test against real AWS
-- Preserve all business logic between data fetch and AWS call
-- Show git diff after modifications to verify changes
-- Display final summary with statistics after all processing complete
-  - Include compilation status (success/failure counts)
+- Mark chains with multiple SDK methods with [★ Multiple SDK] indicator
+- Display progress (i/N) during batch processing
+- Show final summary with compilation status
+
+For detailed requirements, see Analysis Requirements section above.
