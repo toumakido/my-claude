@@ -173,6 +173,44 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
 
    Return: AWS operation type (Read/Delete/Write), operation name, line number, AWS settings, migration summary. Use [selected_chain] as call chain (do not re-trace)."
 
+7.5. **Analyze filter conditions and determine test data strategy with Task tool** (subagent_type=general-purpose)
+   Task prompt: "Analyze FilterExpression in [function_name] at [file_path:line_number] and determine test data strategy:
+
+   Purpose: Avoid functional duplication in test data across multiple handlers
+
+   1. Extract FilterExpression from AWS SDK Read operation using Read:
+      - Search for `FilterExpression:` in Scan/Query input parameters
+      - Extract complete filter string and parameter values
+      - Example: `FilterExpression: \"(attribute_not_exists(#OP) OR attribute_type(#OP, :null)) AND (#RT = :rt)\"`
+
+   2. Categorize filter complexity:
+      - Simple filter: Single attribute check (e.g., `#FIELD = :value`)
+      - Complex filter: Multiple conditions with OR/AND (e.g., `(attribute_not_exists(#F) OR #F = :empty) AND #T <= :lte`)
+      - No filter: GetItem or operations without FilterExpression
+
+   3. Identify filter pattern:
+      - Extract filter structure (ignore parameter values)
+      - Example pattern: `(attribute_not_exists(X) OR attribute_type(X, :null)) AND (Y = :value)`
+      - Compare with filters from other handlers in optimal combination
+
+   4. Determine test data strategy:
+      - If this is the FIRST occurrence of this filter pattern: **Comprehensive testing**
+        - Generate both matching and non-matching test records
+        - Test all filter condition branches (OR, AND, attribute_not_exists, etc.)
+      - If this filter pattern already tested by another handler: **Minimal or skip**
+        - Skip Pre-insert (rely on other handler's filter testing)
+        - Or generate minimal records for handler-specific processing only
+      - If complex filter (3+ conditions): **Always test comprehensively**
+        - Regardless of other handlers
+      - If no filter: **Basic SDK operation testing**
+        - Generate 1-2 matching records only
+
+   5. Document decision:
+      - Return filter pattern, complexity, strategy decision, and rationale
+      - Example: \"Complex filter with attribute_not_exists + parameter check. First occurrence. Strategy: Comprehensive testing with 2 match + 2 non-match records.\"
+
+   Return: Filter pattern, complexity level, test data strategy (comprehensive/minimal/skip), match record count, non-match record count, rationale."
+
 8. **Identify data source access with Task tool** (subagent_type=general-purpose)
    Task prompt: "In function [function_name] at [file_path:line_number], identify ALL data source access BEFORE AWS SDK calls using Read:
 
@@ -192,12 +230,15 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
    Return: list with line numbers, calls, variables, types."
 
 9. **Validate and extract type information with Task tool** (subagent_type=general-purpose)
-   Task prompt: "Before generating test data, extract and validate type information:
+   Task prompt: "Before generating test data, extract and validate type information from model definitions:
 
-   1. Find model definitions using Glob:
+   Purpose: Prevent compilation errors from incorrect type assumptions
+
+   1. Find and read model definition files using Glob + Read:
       - Search for `type.*struct` in `model.go`, `models.go`, `types.go`, `entity.go`, `dto.go`
       - Search in same directory as [file_path] and parent directories
       - Check return types in function signatures
+      - **Important**: Actually READ the model files, do not assume field names or types
 
    2. Extract type information for each data source return type (from step 8):
       - Struct fields and their types (including pointer types: `*string`, `*int64`, `*bool`)
@@ -205,18 +246,48 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
       - Map key/value types
       - Exported vs unexported fields
       - Nested struct types
+      - Struct tags: `json:\"fieldName\"`, `dynamodbav:\"AttributeName\"`
 
-   3. Check required imports for test data:
-      - AWS SDK v2 packages: `github.com/aws/aws-sdk-go-v2/aws`, `github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue`, `github.com/aws/aws-sdk-go-v2/service/*/types`
+   3. Verify pointer type usage patterns:
+      - For pointer fields (`Field *string`), test data must allocate pointer:
+        ```go
+        // Correct for *string fields
+        value := \"example\"
+        entity := &Entity{Field: &value}
+
+        // Or use aws.String helper
+        entity := &Entity{Field: aws.String(\"example\")}
+
+        // Incorrect: direct string literal (compilation error)
+        entity := &Entity{Field: \"example\"}
+        ```
+      - Document which fields require pointer allocation
+
+   4. Check required imports for test data:
+      - AWS SDK v2 packages: `github.com/aws/aws-sdk-go-v2/aws` (for `aws.String`, `aws.Int64`, etc.)
+      - AWS SDK v2 packages: `github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue` (for `MarshalMap`, `UnmarshalMap`)
+      - AWS SDK v2 service types: `github.com/aws/aws-sdk-go-v2/service/*/types` (for service-specific types)
       - Standard library packages for test data construction
 
-   4. For each struct type, document:
+   5. For each struct type, document with examples:
       - Full type name (e.g., `Account`, `*Account`, `[]Account`, `[]*Account`)
       - All field names with exact casing (e.g., `CustomerCode` not `AccountID`)
       - Field types with pointer indicators (e.g., `*string`, `int64`, `*bool`)
-      - Example: `type Account struct { BranchCode string; CustomerCode string; Balance *int64 }`
+      - Correct initialization example:
+        ```go
+        // Example: type Account struct { BranchCode string; CustomerCode string; Balance *int64 }
+        testAccount := &Account{
+            BranchCode:   \"100\",            // Non-pointer field
+            CustomerCode: \"123456\",         // Non-pointer field
+            Balance:      aws.Int64(1000000), // Pointer field - use aws.Int64
+        }
+        ```
 
-   Return: Type information map with exact field names, types, pointer indicators, and required imports list."
+   Return:
+   - Type information map with exact field names, types, pointer indicators
+   - Pointer allocation patterns for each field
+   - Required imports list with full package paths
+   - Initialization examples for each struct type"
 
 10. **Generate test data and pre-insert code with Task tool** (subagent_type=general-purpose)
    Task prompt: "Generate test data and code modifications using validated type information from step 9:
@@ -246,22 +317,60 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
       - Assign test data to same variable
       - Preserve all downstream logic
 
-   Part B - AWS SDK pre-insert code (from step 7):
+   Part B - AWS SDK pre-insert code (from step 7 and step 7.5):
    If AWS operation type is Read or Delete:
-   1. Generate pre-insert code to populate test data:
-      - For GetItem/Scan/Query: generate PutItem with same key
+
+   **Use test data strategy from step 7.5 to determine record counts**
+
+   1. Generate BOTH matching and non-matching test records:
+
+      **Matching records** (should be retrieved by filter):
+      - Generate N records based on step 7.5 strategy (e.g., 1-2 for minimal, 2-3 for comprehensive)
+      - Ensure all FilterExpression conditions are satisfied
+      - Example for filter `(attribute_not_exists(#OP) OR #OP = :empty) AND (#RT = :rt)`:
+        ```go
+        matchRecords := []*Entity{
+            {ID: \"match-001\", RequestType: aws.Int64(1), OpStatus: nil},        // attribute_not_exists
+            {ID: \"match-002\", RequestType: aws.Int64(1), OpStatus: aws.String(\"\")}, // OR #OP = :empty
+        }
+        ```
+
+      **Non-matching records** (should be excluded by filter):
+      - Generate M records based on step 7.5 strategy (e.g., 1 for minimal, 2-3 for comprehensive)
+      - Violate different FilterExpression conditions to test filter correctness
+      - Example for same filter:
+        ```go
+        nonMatchRecords := []*Entity{
+            {ID: \"nomatch-001\", RequestType: aws.Int64(1), OpStatus: aws.String(\"PROCESSED\")}, // Non-null OpStatus
+            {ID: \"nomatch-002\", RequestType: aws.Int64(999), OpStatus: nil},                    // Wrong RequestType
+        }
+        ```
+
+      **Special cases**:
+      - Empty strings: Include if filter checks `attribute_type` or `= :empty`
+      - Timestamps: Include out-of-range values if filter uses `<=`, `>=`, `BETWEEN`
+      - NULL types: Consider SDK v1 migration scenarios where NULL handling may differ
+
+   2. Generate Pre-insert code for both record sets:
+      - For GetItem/Scan/Query: generate PutItem for each test record (matching + non-matching)
       - For GetObject: generate PutObject with same key
       - For DeleteItem: generate PutItem with same key
       - Use same resource (table/bucket) from step 7
       - Use realistic test data values with correct types from step 9
+      - Add comment documenting expected behavior:
+        ```go
+        // Pre-insert: test data for Scan operation
+        // Matching records: 2 (should be retrieved)
+        // Non-matching records: 2 (should be excluded)
+        ```
 
-   2. Identify insertion point:
+   3. Identify insertion point:
       - Line number just before AWS SDK Read/Delete operation
       - Preserve indentation
 
    Return:
    - Data source replacements: [original code (commented), test assignment code with imports]
-   - Pre-insert code (if AWS operation is Read/Delete): [pre-insert code, insertion line number]"
+   - Pre-insert code (if AWS operation is Read/Delete): [pre-insert code with match/non-match records, match count, non-match count, insertion line number]"
 
 11. **Apply code modifications with Edit tool**
 
@@ -284,19 +393,29 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
    - Output: "Pre-insertコード追加: [file_path:line_number]"
    - Add comment above pre-insert code: "// Pre-insert: test data for [operation_name]"
 
-   Part C - Add verification logging (from step 9):
+   Part C - Add verification logging (from step 9 and step 10):
    For Read operations (Scan, Query, GetItem, GetObject):
    - Use Edit tool to insert logging code after AWS SDK Read operation
    - Extract key fields from type information (step 9)
-   - Log format:
+   - Use expected record counts from step 10 (match count, non-match count)
+   - Log format with filter verification:
      ```go
      // Verify Pre-insert: log retrieved records
-     logger.Infof(\"[function_name] returned %d records\", len(result))
+     // Expected: N matching records (inserted: N match + M non-match)
+     logger.Infof(\"Test records inserted: %d match (should be retrieved), %d non-match (should be excluded)\", matchCount, nonMatchCount)
+     logger.Infof(\"[function_name] returned %d records (expected: %d)\", len(result), matchCount)
+
+     if len(result) != matchCount {
+         logger.Warnf(\"Filter verification failed: expected %d records but got %d\", matchCount, len(result))
+     }
+
+     // Log details of retrieved records for debugging
      for i, record := range result {
          logger.Infof(\"  [%d] Key1=%v, Key2=%v, ...\", i, record.Key1, record.Key2)
      }
      ```
    - Insert after Read operation, before any result length check
+   - Include matchCount and nonMatchCount as constants in the code (from step 10)
    - Output: "検証ログ追加: [file_path:line_number]"
 
 12. **Verify compilation with Bash tool**
@@ -535,21 +654,53 @@ _, err := client.PutItem(ctx, &dynamodb.PutItemInput{
 - Provide actionable AWS console verification steps
 
 ### Test Data and Code Modifications
-- **Type validation (step 9)**: Extract exact type information before generating test data
-  - Match struct field names exactly (e.g., `CustomerCode` not `AccountID`)
-  - Distinguish pointer types: `*string`, `*int64`, `*bool`
-  - Distinguish slice element types: `[]*Type` vs `[]Type`
-  - Include all required imports: `aws`, `attributevalue`, service-specific `types`
+
+**Type validation (step 9)**: Extract exact type information from model definitions before generating test data
+- **Important**: Actually READ model files, do not assume field names or types
+- Match struct field names exactly (e.g., `CustomerCode` not `AccountID`)
+- Distinguish pointer types: `*string`, `*int64`, `*bool`
+- Distinguish slice element types: `[]*Type` vs `[]Type`
+- Document pointer allocation patterns (e.g., `aws.String("value")` for `*string` fields)
+- Include all required imports: `aws`, `attributevalue`, service-specific `types`
+- Provide initialization examples for each struct type
+
+**Filter condition analysis (step 7.5)**: Avoid functional duplication in test data
+- Extract FilterExpression from Scan/Query operations
+- Categorize filter complexity (simple, complex, none)
+- Identify filter patterns (structure, not parameter values)
+- Determine test data strategy:
+  - Comprehensive testing: First occurrence of filter pattern, or complex filters (3+ conditions)
+  - Minimal testing: Filter pattern already tested by another handler
+  - Skip Pre-insert: Rely on other handler's filter testing
+- Document strategy decision and rationale
+
+**Test record generation (step 10 Part B)**: Generate both matching and non-matching records
+- **Matching records**: Should be retrieved by FilterExpression (N records based on strategy)
+- **Non-matching records**: Should be excluded by FilterExpression (M records based on strategy)
+- Test different filter violation patterns:
+  - Wrong parameter values
+  - Non-null values for `attribute_not_exists` checks
+  - Out-of-range values for comparison operators (`<=`, `>=`, `BETWEEN`)
+  - Empty strings for `attribute_type` or `= :empty` checks
+- Add comment documenting expected counts:
+  ```go
+  // Pre-insert: test data for Scan operation
+  // Matching records: 2 (should be retrieved)
+  // Non-matching records: 2 (should be excluded)
+  ```
+
+**Verification logging (step 11 Part C)**: Confirm filter behavior with expected vs actual comparison
+- Log test record counts: `matchCount match (should be retrieved), nonMatchCount non-match (should be excluded)`
+- Log actual retrieved count: `returned N records (expected: matchCount)`
+- Add warning if mismatch: `Filter verification failed: expected X records but got Y`
+- Log retrieved record details for debugging
+
+**General**:
 - Match Go types exactly (structs, slices, maps, primitives, pointers)
 - Include all fields used in downstream logic
 - Comment out error handling for test data
 - Preserve indentation in code blocks
 - Match variable names exactly from original code
-- For AWS Read/Delete operations:
-  - Generate pre-insert code to populate test data (e.g., PutItem before GetItem/Scan/Query)
-  - Automatically insert pre-insert code before AWS SDK operation
-  - Add comment: "// Pre-insert: test data for [operation_name]"
-  - Add verification logging after Read operation to confirm data retrieval
 - Use `<details>` tags for readability
 
 ### Complex Chain Handling
@@ -577,7 +728,7 @@ _, err := client.PutItem(ctx, &dynamodb.PutItemInput{
 ## Notes
 
 - Stop immediately if branch diff does not contain `aws-sdk-go-v2` imports
-- Use Task tool for code analysis (steps 2, 3, 7, 8, 9, 10)
+- Use Task tool for code analysis (steps 2, 3, 7, 7.5, 8, 9, 10)
 - Use Edit tool to automatically apply code modifications (step 11)
 - Use Bash tool for compilation verification (step 12)
 - **Deduplication** (step 3):
@@ -597,17 +748,24 @@ _, err := client.PutItem(ctx, &dynamodb.PutItemInput{
 - Provide complete call chains for traceability
 - Identify AWS operation type (Read/Delete/Write) in step 7
 - Focus on connection configuration (client, endpoints, regions)
+- **Filter condition analysis and test data strategy** (step 7.5):
+  - Extract FilterExpression from Scan/Query operations
+  - Categorize filter complexity (simple, complex, none)
+  - Identify filter patterns to avoid functional duplication
+  - Determine comprehensive/minimal/skip strategy for each handler
 - **Type validation and test data generation**:
-  - Extract exact type information in step 9 (field names, pointer types, slice types)
+  - Extract exact type information in step 9 (field names, pointer types, slice types, struct tags)
+  - Actually READ model files, do not assume field names or types
   - Generate test data with correct types in step 10 Part A
   - Include required imports (aws, attributevalue, types)
 - Automatically replace data source access with test data (step 11 Part A)
 - Mock only data source access (repository, DB, API, file)
 - For AWS Read/Delete operations:
-  - Generate pre-insert code to populate test data (step 10 Part B)
+  - Generate BOTH matching and non-matching test records (step 10 Part B)
+  - Use test data strategy from step 7.5 to determine record counts
   - Automatically insert pre-insert code before AWS SDK operation (step 11 Part B)
-  - Add verification logging after Read operation (step 11 Part C)
-  - Enables testing of read/delete operations with pre-populated data
+  - Add verification logging with expected vs actual comparison (step 11 Part C)
+  - Enables testing of read/delete operations with pre-populated data and filter verification
 - **Compilation verification** (step 12):
   - Run `go build` after code modifications
   - Fix compilation errors automatically (imports, types, fields)
