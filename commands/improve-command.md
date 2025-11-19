@@ -25,8 +25,8 @@ Output language: Japanese, formal business tone
 ## Process
 
 1. Validate target command:
-   - Check if `commands/<command-name>.md` exists
-   - Read and understand command specification
+   - Check if `commands/<command-name>.md` exists using Read tool
+   - If not found: Display error and list available commands (see Error Handling)
 2. Analyze conversation history:
    - Identify when target command was executed (search for `/command-name` in conversation)
    - Extract problems encountered during/after execution
@@ -40,10 +40,10 @@ Output language: Japanese, formal business tone
    - Additional questions needed during execution - count AskUserQuestion tool calls during command execution
    - Post-command fixes by user - commits/edits after command completion
 
-   Optional (only if needed for reference):
-   - Get PR number for reference: `gh pr list --limit 5`
-   - Check if repository is public: `gh repo view --json isPrivate`
-   - Note: Repository must be public to include PR links in issue
+   **Check repository type** (for reference links in issue):
+   - Run: `gh repo view --json isPrivate -q .isPrivate`
+   - If repository is public: Collect PR/commit references for issue body using `gh pr list --limit 5`
+   - If repository is private: Skip reference collection (will use generalized examples only)
 4. Extract improvement opportunities:
    - Missing patterns or examples
    - Insufficient guidance or documentation
@@ -86,8 +86,8 @@ Output language: Japanese, formal business tone
 
 4.6. Evaluate severity and confirm with user:
    - Severity levels:
-     - Critical/Important: コマンド仕様の明確な不足、複数回の指摘 → Proceed to issue creation
-     - Nice-to-have/None: 軽微な改善、1回のみの指摘、改善点なし → Use AskUserQuestion to confirm before proceeding
+     - Critical/Important: コマンド仕様の明確な不足、複数回の指摘 → Proceed to step 5
+     - Nice-to-have/None: 軽微な改善、1回のみの指摘、改善点なし → Use AskUserQuestion to confirm before proceeding to step 5
 5. Generate structured issue content (if confirmed):
    - Title: `<command-name>.md の改善提案: [主要な改善点の要約]`
    - Body sections:
