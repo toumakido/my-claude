@@ -50,7 +50,41 @@ Output language: Japanese, formal business tone
    - Additional checks needed
    - Service/library-specific knowledge gaps
    - More efficient approaches
-4.5. Evaluate severity and confirm with user:
+4.5. Categorize issues by improvement scope:
+
+   **Purpose**: Distinguish between command specification issues and implementation-phase issues
+
+   **Categories**:
+
+   1. **Command specification issues** (Should be included in improvement proposal):
+      - Missing or unclear steps in command process
+      - Insufficient guidance or examples in command documentation
+      - Lack of error handling patterns in command specification
+      - Missing validation steps
+      - Unclear decision criteria (e.g., when to apply certain patterns)
+
+      Examples:
+      - "Command doesn't specify how to handle duplicate test data"
+      - "No guidance on determining test data distribution strategy"
+      - "Missing step for validating type information"
+
+   2. **Implementation-phase issues** (Should be excluded from command specification):
+      - Technology-specific breaking changes (e.g., SDK version differences)
+      - Library-specific behavior patterns
+      - Domain-specific business logic
+      - Project-specific code patterns
+
+      Examples:
+      - "SDK version X handles empty strings differently than version Y"
+      - "This API requires specific authentication headers"
+      - "Business rule X requires validation Y"
+
+   **Action**:
+   - Review all identified issues and categorize them
+   - Only include command specification issues in improvement proposal
+   - Document excluded implementation-phase issues separately (if requested by user)
+
+4.6. Evaluate severity and confirm with user:
    - Severity levels:
      - Critical/Important: コマンド仕様の明確な不足、複数回の指摘 → Proceed to issue creation
      - Nice-to-have/None: 軽微な改善、1回のみの指摘、改善点なし → Use AskUserQuestion to confirm before proceeding
@@ -62,6 +96,44 @@ Output language: Japanese, formal business tone
      - 改善提案: Specific proposals with code samples
      - 期待される効果: Expected benefits
      - 参考: Links to relevant PRs/commits (only if repository is public)
+5.5. Present improvement proposal summary to user for confirmation:
+
+   **Purpose**: Ensure proposal aligns with user's intent before creating issue
+
+   **Actions**:
+   1. Generate concise summary of improvement proposals (3-5 bullet points)
+   2. Present to user using text output (NOT AskUserQuestion, NOT issue creation yet)
+   3. Format:
+      ```
+      ## 改善提案サマリー
+
+      以下の改善をissueとして提案します：
+
+      1. [改善項目1]: [1行の説明]
+      2. [改善項目2]: [1行の説明]
+      3. [改善項目3]: [1行の説明]
+
+      この内容でissueを作成してよろしいですか？
+      追加・削除・修正したい項目があれば教えてください。
+      ```
+   4. Wait for user confirmation or feedback
+   5. Adjust proposal based on feedback
+   6. Proceed to Step 6 only after user approval
+
+   **Example**:
+   ```
+   ## 改善提案サマリー
+
+   以下の改善をissueとして提案します：
+
+   1. テストデータ設計方針の明記: 重複を避ける戦略を追加
+   2. フィルター検証用データ生成の必須化: match/non-matchの両方を生成
+   3. 型情報検証ステップの追加: 事前検証でコンパイルエラー防止
+
+   この内容でissueを作成してよろしいですか？
+   追加・削除・修正したい項目があれば教えてください。
+   ```
+
 6. Create GitHub issue:
    - Determine target repository:
      - Check current repository: `gh repo view --json nameWithOwner -q .nameWithOwner`
@@ -139,24 +211,61 @@ Output language: Japanese, formal business tone
 
 ## Code Example Generalization
 
-When working repository is private, generalize code examples to avoid exposing confidential information:
+When working repository is private, generalize code examples to avoid exposing confidential information.
 
-1. Extract general patterns from actual code
-2. Replace specific values with generic placeholders:
-   - Repository names → `example-repo`
-   - Variable names → descriptive generic names (`userId` → `entityId`)
-   - Function names → pattern-based names (`GetActiveUsers` → `FetchEntities`)
-   - Company/product-specific terms → generic terms
-3. Add explanatory comments to clarify intent
+### Generalization Levels
 
-Example transformation:
+Apply generalization from most specific to most generic:
+
+**Level 1: Identifiers (MUST generalize)**
+- Function/handler names: Use generic names like `handlerA`, `processEntity`, `fetchData`
+- Variable names: Use generic names like `entityId`, `recordKey`, `value`
+- Type names: Use generic names like `Entity`, `Record`, `Item`
+- Database table names: Use generic names like `EntityTable`, `RecordStore`
+
+**Level 2: Domain concepts (SHOULD generalize)**
+- Business-specific terms: Replace with generic equivalents
+- Product/service names: Use placeholders like `ServiceA`, `ComponentX`
+- Company-specific terminology: Remove or replace with generic terms
+
+**Level 3: Technical patterns (MAY keep specific)**
+- FilterExpression structure: Can show actual syntax patterns
+- Query patterns: Can show structure without specific field names
+- AWS service names: DynamoDB, S3, Lambda (public knowledge)
+- Standard error patterns: Can show generic error handling
+
+**Level 4: Generic constructs (MUST keep specific)**
+- Language keywords: Keep as-is
+- Standard library functions: Keep as-is
+- Common patterns: `ctx context.Context`, `err error`
+
+### Generalization Guidelines
+
+1. **Avoid concrete examples**: Don't include specific struct definitions, actual field names, or real parameter values
+2. **Use abstract descriptions**: Describe patterns in prose rather than showing actual code
+3. **Focus on structure**: Show FilterExpression patterns, not actual field names
+4. **When in doubt, ask**: Use AskUserQuestion to confirm if specific terms should be generalized
+
+**Good example** (generalized):
+```
+FilterExpression with multiple conditions using OR and AND operators,
+checking for attribute existence and type
+```
+
+**Bad example** (too specific):
 ```go
-// Actual code (private repository)
+FilterExpression: "(attribute_not_exists(#OpStatus) OR attribute_type(#OpStatus, :null)) AND (#RequestType = :rt)"
+```
+
+### Example Transformation
+
+```go
+// Actual code (private repository) - DO NOT include this in issue
 func (repo *UserRepository) GetActiveUsers(ctx context.Context, companyId string) ([]*User, error) {
     return repo.dynamoDB.QueryByCompany(ctx, companyId, "active")
 }
 
-// Generalized code (for issue)
+// Generalized code (for issue) - Use this level of abstraction
 func (repo *EntityRepository) FetchEntities(ctx context.Context, filterKey string) ([]*Entity, error) {
     return repo.store.QueryByFilter(ctx, filterKey, filterValue)
 }
