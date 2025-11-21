@@ -61,6 +61,22 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
    - Mark chains with multiple SDK methods as high priority
    - Execute Grep searches in parallel for independent functions
 
+   **Multiple path handling**:
+   When a function has multiple call chains, select simplest path:
+   1. Selection priority (choose first match):
+      - Fewest external dependencies (< 4 data sources preferred)
+      - Shortest chain length (< 4 hops preferred)
+      - Direct entry point (main function or simple handler)
+   2. Exclude complex paths:
+      - 6+ external dependencies (too many mocks needed)
+      - 6+ chain hops (too deep call stack)
+      - Multiple validation layers (complex to satisfy)
+   3. Document path selection in output:
+      ```
+      Selected: POST /v1/entities (2 dependencies, 3 hops)
+      Skipped: Background job path (7 dependencies, 5 hops) - too complex
+      ```
+
    Call chain format:
    ```
    [Entry Point]
@@ -141,7 +157,24 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
    - Maintain original priority sorting (from step 2)
    - Result: minimal set covering all unique SDK operation types
 
-   Return: optimal combination (deduplicated chains), each with group info"
+   Step 4: Verify entry points before finalizing
+   For each selected representative chain:
+   1. Confirm entry point is traceable and executable:
+      - API handler: Verify route registration exists using Grep
+      - Task command: Verify binary in cmd/ directory using Glob
+      - CLI command: Verify subcommand definition using Grep
+   2. If entry point cannot be confirmed:
+      - Use Grep to search for function references in codebase
+      - If no active references found: Mark as \"SKIP - No active callers\"
+      - Remove from optimal combination
+      - Document in skipped functions list
+   3. Output skipped functions separately:
+      ```
+      以下の関数はエントリーポイントが不明なためスキップします:
+      - [file:line] FunctionName | [Operation] | Reason: No route registration found
+      ```
+
+   Return: optimal combination (deduplicated chains with verified entry points), skipped functions list"
 
 4. **Format and cache optimal combination**
    Store Task result in variable for batch processing.
@@ -274,6 +307,16 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
    Task prompt: "For call chain [entry_point → ... → target_function] from step 2, identify ALL data source access in ALL functions in the chain.
 
    **Purpose**: Enable end-to-end execution from entry point to AWS SDK call by mocking all data sources in the call chain.
+
+   **Analysis scope principle**:
+   - Focus on the SPECIFIC execution path used for verification (e.g., POST /v1/entities)
+   - Ignore other paths that call the same function (e.g., GET /v1/entities, background jobs)
+   - Mock only external dependencies within the verification path
+   - Rationale: Verification only requires one working path, not all possible paths
+
+   Example:
+   - Target verification path: POST /v1/entities → service.Create → repo.Save
+   - Ignore: GET /v1/entities → service.List → repo.Save (same repo.Save, different path)
 
    **Target functions**: All functions in the call chain from [selected_chain]
    - Entry point (handler/main)
@@ -888,11 +931,27 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
         - Error handling
         - Validation/business logic (to be kept or commented)
       - new_string: Modified code block including:
-        - Commented original data source call
-        - Commented error handling
-        - Mock data assignment with descriptive comment
+        - Commented original data source call (using simple `//` comment)
+        - Commented error handling (using simple `//` comment)
+        - Mock data assignment with brief reason comment (e.g., `// Mock data for testing`)
         - Validation/business logic (kept or commented based on step 10 strategy)
       - Output: "データソース書き換え完了: [function_name] [file_path:line_number]"
+
+      **Comment policy** (Git-managed projects):
+      - Use simple line comments (`//`) for commented-out code
+      - Do NOT use detailed preservation comments (`/* Original code: ... */`)
+      - Add only brief reason comments (e.g., `// Mock data for testing`)
+      - Git diff provides full change history
+
+      Example:
+      ```go
+      // businessDays, err := h.repository.GetBusinessDays(now)
+      // if err != nil {
+      //     return err
+      // }
+      // Mock data for testing
+      businessDays := []Date{today.AddDate(0, 0, 1), today.AddDate(0, 0, 2)}
+      ```
 
    2. Apply edits sequentially in call chain order (entry → target):
       - Entry point edits first
