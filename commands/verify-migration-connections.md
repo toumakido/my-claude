@@ -74,6 +74,25 @@ This command **prepares code for AWS SDK v2 connection testing** by **temporaril
    - Mark chains with multiple SDK methods as high priority
    - Execute Grep searches in parallel for independent functions
 
+   Step 2.5: Verify active callers (exclude unused implementations)
+
+   For each extracted function:
+   1. Use Grep to search for function calls (exclude *_test.go, mocks/*.go)
+   2. Count active call sites in production code (handlers, tasks, services)
+   3. If active callers = 0:
+      - Mark as "SKIP - No active callers (implementation only)"
+      - Exclude from call chain list
+      - Log for reference
+
+   Example verification:
+   ```bash
+   # Search for function calls
+   grep -r "FunctionName" --include="*.go" --exclude="*_test.go" --exclude-dir="mocks"
+
+   # Verify call sites are in production code
+   grep -r "FunctionName" internal/api/handler internal/tasks cmd/
+   ```
+
    **Multiple path handling**:
    When a function has multiple call chains, select simplest path:
    1. Selection priority (choose first match):
@@ -129,7 +148,7 @@ This command **prepares code for AWS SDK v2 connection testing** by **temporaril
    - Chain with 1 SDK method, 2 hops
    - Chain with 1 SDK method, 4 hops (lowest)
 
-   Return: function list with all call chains sorted by priority, skipped functions list."
+   Return: Filtered function list with only actively called functions, all call chains sorted by priority, skipped functions list (including unused implementations)."
 
 3. **Group and deduplicate chains with Task tool** (subagent_type=general-purpose)
    Task prompt: "Group and deduplicate call chains to create optimal combination:
@@ -191,6 +210,22 @@ This command **prepares code for AWS SDK v2 connection testing** by **temporaril
 
 4. **Format and cache optimal combination**
    Store Task result in variable for batch processing.
+
+   Output format (simple chain format):
+   ```
+   [N]. [file:line] | [function] | [operations] [markers]
+   Chain: [entry point] → [intermediate layers] → AWS SDK API ([SDK method count], [hop count])
+   Active callers: [count]箇所 ([locations])
+   ```
+
+   Example:
+   ```
+   1. internal/service/datastore.go:306 | CreateRecord | DynamoDB TransactWriteItems [+3 other operations]
+   Chain: POST /v1/records → handler.CreateRecords → service.CreateRecord → DynamoDB TransactWriteItems (3 SDK methods, 4 hops)
+   Active callers: 5箇所 (handlers)
+   ```
+
+   DO NOT output verbose format with full code signatures unless explicitly requested.
 
    Output:
    ```
