@@ -149,6 +149,7 @@ This command **prepares code for AWS SDK v2 connection testing** by **temporaril
    - Example: all chains using 'DynamoDB PutItem' are grouped together
    - Ignore: file path, line number, function name, region, endpoint, table/bucket names, filters, and all parameters
    - Rationale: From operation verification perspective, only AWS service type and SDK operation matter
+   - **IMPORTANT**: Each group MUST select exactly ONE representative chain (not multiple)
 
    Examples of grouping:
    ```
@@ -164,11 +165,14 @@ This command **prepares code for AWS SDK v2 connection testing** by **temporaril
    ```
 
    Step 2: Select representative chain from each group
-   For each group with multiple chains:
-   - Priority 1: Shortest chain (fewest hops)
-   - Priority 2: Entry point is 'main' function
-   - Priority 3: First in list (tie-breaker)
-   - Mark selected chain with: [+N other operations] where N = group size - 1
+   For each group:
+   - **MUST select exactly ONE representative chain** (not multiple)
+   - Selection priority:
+     - Priority 1: Shortest chain (fewest hops)
+     - Priority 2: Entry point is 'main' function
+     - Priority 3: First in list (tie-breaker)
+   - Mark selected chain with: [+N other chains] where N = group size - 1
+   - **Verification**: Ensure no duplicate AWS_service + SDK_operation in final output
 
    For groups with single chain:
    - Select the only chain
@@ -309,7 +313,19 @@ This command **prepares code for AWS SDK v2 connection testing** by **temporaril
 
       **COMMENT (unrelated to target AWS SDK operation)**:
       - Other AWS SDK service calls (different service or independent operation)
-      - External API calls (HTTP clients, gRPC, etc.)
+      - **External API calls**:
+        - **Repository/Gateway/Client layer method calls**: `*Repository`, `*Gateway`, `*Client` type instance methods
+          - Examples: `userRepo.GetUser()`, `dataRepo.FetchData()`, `seqRepo.GetNext()`
+          - **Detection patterns**:
+            1. Type patterns: `type.*Repository`, `type.*Gateway`, `type.*Client`
+            2. Method call patterns: `repo\..*\(`, `gateway\..*\(`, `client\..*\(`
+            3. Common method prefixes: `Get*`, `Fetch*`, `Register*`, `Update*`, `Delete*`
+        - **HTTP/gRPC clients**: `http.Client`, `grpc.ClientConn` usage
+        - **External system integrations**: Business date APIs, third-party services, authentication services
+        - **Identification method**:
+          1. Search for Repository/Gateway/Client interface method calls
+          2. Search for external system names in package/type names
+          3. Identify network I/O operations
       - Database operations not in target data flow
       - Logging statements
       - Metrics collection
@@ -376,6 +392,55 @@ This command **prepares code for AWS SDK v2 connection testing** by **temporaril
       ```
       コメントアウト完了: [function_name] [file:line] (N blocks commented)
       ```
+
+   **Step 6.C.2: Replace commented-out code with dummy values**
+
+   For each commented-out external API call that returns values used in target data flow:
+
+   **Dummy value patterns**:
+   - **Date values**: Use fixed date or `time.Now()`
+     ```go
+     // Commented out for testing: Business date API not related to target operation
+     // businessDate := dateRepo.GetBusinessDate(ctx)
+     businessDate := "20250101" // Dummy date for testing
+     ```
+
+   - **Identifiers/codes**: Use sequential or test prefixes
+     ```go
+     // Commented out for testing: Entity code API not related to target operation
+     // code := entityRepo.GetCode(ctx)
+     code := "001" // Dummy code for testing
+     ```
+
+   - **Counter values**: Use fixed integer
+     ```go
+     // Commented out for testing: Sequence API not related to target operation
+     // counter := seqRepo.GetNext(ctx)
+     counter := 1 // Dummy counter for testing
+     ```
+
+   - **UUIDs**: Use predefined UUID
+     ```go
+     // Commented out for testing: ID generation API not related to target operation
+     // id := externalAPI.GenerateID(ctx)
+     id := uuid.MustParse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee") // Dummy UUID for testing
+     ```
+
+   - **Complex objects**: Use minimal struct initialization
+     ```go
+     // Commented out for testing: Details API not related to target operation
+     // details := entityRepo.GetDetails(ctx, id)
+     details := EntityDetails{ // Dummy details for testing
+         ID:   "test-id",
+         Name: "test-name",
+     }
+     ```
+
+   **Guidelines**:
+   - Ensure dummy values satisfy type requirements for compilation
+   - Use simple, recognizable patterns (e.g., "test-", "dummy-", "001")
+   - Document dummy values with inline comments (`// Dummy X for testing`)
+   - If commented code doesn't return values or values aren't used: skip dummy value assignment
 
    D. **Verify compilation after comment-out**
       - Run: `go build -o /tmp/test-build 2>&1`
