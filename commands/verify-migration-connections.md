@@ -1079,7 +1079,7 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
     # Example: API call
     curl -X POST https://api.example.com/v1/entities \
       -H "Content-Type: application/json" \
-      -H "Cookie: jwt=<token>" \
+      -H "Bearer: jwt=<token>" \
       -d '{"param":"value"}'
 
     # Or: ECS task
