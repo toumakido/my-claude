@@ -230,9 +230,16 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
 
 ### Phase 3: Comment-out Unrelated Code
 
+**IMPORTANT**: This phase MUST be executed for ALL chains. Do NOT skip this phase.
+- This modifies production code temporarily for AWS SDK verification
+- Changes are reversible with `git restore`
+- The purpose is to isolate AWS SDK operation for focused testing
+
 6. **Comment out unrelated code in call chain functions (strict mode)**
 
    For each chain in optimal combination (index i from 1 to N):
+
+   **CRITICAL**: Execute this step for EVERY chain. Do NOT skip even if you think the code is production-ready.
 
    A. Display progress:
    ```
@@ -242,6 +249,11 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
 
    B. **Identify unrelated code with Task tool** (subagent_type=general-purpose)
    Task prompt: "For call chain [entry_point → ... → target_function] with target AWS SDK operation [operation_name]:
+
+   **CRITICAL**: You MUST identify and return code blocks to comment out. Do NOT skip this analysis.
+   - Even if the code appears production-ready, you must analyze and identify unrelated blocks
+   - If you cannot find any unrelated code, explicitly state 'No unrelated code found' with reasoning
+   - Do NOT make assumptions about whether this step should be skipped
 
    Purpose: Comment out ALL code unrelated to target AWS SDK operation to enable focused testing
 
@@ -300,6 +312,10 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
    ```"
 
    C. **Apply comment-out modifications with Edit tool**
+
+   **CRITICAL**: Apply ALL modifications identified in step B. Do NOT skip this step.
+   - If step B returned 'No unrelated code found', output: "スキップ: コメントアウトするコードなし"
+   - Otherwise, apply ALL comment-out modifications as specified below
 
    For each function in call chain (process in order: entry → target):
 
