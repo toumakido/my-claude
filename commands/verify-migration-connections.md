@@ -954,8 +954,10 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
 
    B. Static analysis (if tools available):
    - Run go vet and staticcheck in parallel (independent checks):
-     - `go vet ./... 2>&1` (check for common mistakes including nil pointer issues)
-     - `staticcheck ./... 2>&1` if installed (advanced checks)
+     - Use Bash tool twice in single message for parallel execution:
+       - First call: `go vet ./... 2>&1`
+       - Second call: `staticcheck ./... 2>&1` (if installed)
+     - Example: Two Bash tool invocations in same response
    - If go vet reports issues in modified files:
      - Analyze warnings (especially nil pointer dereferences, unreachable code)
      - Output: "警告: go vet detected issues: [summary]"
@@ -1045,7 +1047,7 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
     検証ログ: 合計L個
     コンパイル: 成功P個 / 失敗Q個
 
-    すべての処理が完了しました。
+    次: Step 16でAWS環境での動作確認手順を出力
     ```
 
 16. **Generate AWS verification procedures section**
@@ -1270,11 +1272,7 @@ _, err := client.PutItem(ctx, &dynamodb.PutItemInput{
 
 データソースモック: 合計8個
 
-次のステップ:
-2. アプリケーションを実行してAWS接続をテスト
-3. 必要に応じてテストデータを調整
-
-すべての処理が完了しました。
+次: AWS環境での動作確認手順を参照（上記Step 16の出力）
 ```
 
 ## Analysis Requirements
