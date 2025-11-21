@@ -1045,14 +1045,6 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
     検証ログ: 合計L個
     コンパイル: 成功P個 / 失敗Q個
 
-    次のステップ:
-    1. git diff で変更内容を確認
-    2. コンパイルエラーがある場合は修正
-    3. アプリケーションを実行してAWS接続をテスト
-    4. ログ出力から取得レコード数と内容を確認
-    5. CloudWatchログで各API呼び出しを確認
-    6. 必要に応じてテストデータを調整
-
     すべての処理が完了しました。
     ```
 
@@ -1094,8 +1086,6 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
       --task-definition process-data:latest \
       --launch-type FARGATE
     ```
-
-    **CloudWatch Logs**: `/ecs/service-name` or `/aws/lambda/function-name`
 
     **期待されるログ**:
     ```
@@ -1251,7 +1241,6 @@ _, err := client.PutItem(ctx, &dynamodb.PutItemInput{
 
 **動作確認観点**:
 - AWSコンソール: [確認するサービス/リソース]
-- CloudWatchログ: [確認すべきAPIコール]
 - 設定確認: [region/endpoint/認証情報など]
 ```
 
@@ -1282,10 +1271,8 @@ _, err := client.PutItem(ctx, &dynamodb.PutItemInput{
 データソースモック: 合計8個
 
 次のステップ:
-1. git diff で変更内容を確認
 2. アプリケーションを実行してAWS接続をテスト
-3. CloudWatchログで各API呼び出しを確認
-4. 必要に応じてテストデータを調整
+3. 必要に応じてテストデータを調整
 
 すべての処理が完了しました。
 ```
@@ -1304,7 +1291,6 @@ _, err := client.PutItem(ctx, &dynamodb.PutItemInput{
 **Include (AWS-specific verification)**:
 - AWS API endpoints for verification
 - ECS task run commands with aws-cli
-- CloudWatch Logs log group names
 - X-Ray trace points
 - Expected AWS SDK call sequences
 
