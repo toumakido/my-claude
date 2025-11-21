@@ -80,18 +80,8 @@ This command **prepares code for AWS SDK v2 connection testing** by **temporaril
    1. Use Grep to search for function calls (exclude *_test.go, mocks/*.go)
    2. Count active call sites in production code (handlers, tasks, services)
    3. If active callers = 0:
-      - Mark as "SKIP - No active callers (implementation only)"
+      - Mark as "SKIP - No active callers"
       - Exclude from call chain list
-      - Log for reference
-
-   Example verification:
-   ```bash
-   # Search for function calls
-   grep -r "FunctionName" --include="*.go" --exclude="*_test.go" --exclude-dir="mocks"
-
-   # Verify call sites are in production code
-   grep -r "FunctionName" internal/api/handler internal/tasks cmd/
-   ```
 
    **Multiple path handling**:
    When a function has multiple call chains, select simplest path:
@@ -189,22 +179,15 @@ This command **prepares code for AWS SDK v2 connection testing** by **temporaril
    - Maintain original priority sorting (from step 2)
    - Result: minimal set covering all unique SDK operation types
 
-   Step 4: Verify entry points before finalizing
+   Step 4: Verify entry points
    For each selected representative chain:
-   1. Confirm entry point is traceable and executable:
-      - API handler: Verify route registration exists using Grep
-      - Task command: Verify binary in cmd/ directory using Glob
-      - CLI command: Verify subcommand definition using Grep
-   2. If entry point cannot be confirmed:
-      - Use Grep to search for function references in codebase
-      - If no active references found: Mark as \"SKIP - No active callers\"
+   1. Confirm entry point is traceable using Grep/Glob:
+      - API handler: Verify route registration
+      - Task command: Verify binary in cmd/
+      - CLI command: Verify subcommand definition
+   2. If entry point unconfirmed:
+      - Mark as "SKIP - No entry point"
       - Remove from optimal combination
-      - Document in skipped functions list
-   3. Output skipped functions separately:
-      ```
-      以下の関数はエントリーポイントが不明なためスキップします:
-      - [file:line] FunctionName | [Operation] | Reason: No route registration found
-      ```
 
    Return: optimal combination (deduplicated chains with verified entry points), skipped functions list"
 
@@ -278,15 +261,17 @@ This command **prepares code for AWS SDK v2 connection testing** by **temporaril
 
 ### Phase 3: Comment-out Unrelated Code
 
-**IMPORTANT**: This phase MUST be executed for ALL chains. Do NOT skip this phase.
-- Purpose: Isolate target AWS SDK operation by removing unrelated code that would interfere with testing
-- This ensures only the target AWS SDK call executes during verification
+**CRITICAL - MUST NOT SKIP**: This phase MUST be executed for ALL chains without exception.
+
+**Why this is required**:
+- Isolates target AWS SDK operation by removing unrelated code
+- Prevents interference from other AWS SDK calls, external APIs, logging, metrics
+- Enables focused testing of specific SDK operation
+- Without this step, verification will test multiple operations simultaneously, making it impossible to identify which SDK v2 migration is actually working
 
 6. **Comment out unrelated code in call chain functions (strict mode)**
 
    For each chain in optimal combination (index i from 1 to N):
-
-   **CRITICAL**: Execute this step for EVERY chain. Do NOT skip even if you think the code is production-ready.
 
    A. Display progress:
    ```
@@ -301,8 +286,6 @@ This command **prepares code for AWS SDK v2 connection testing** by **temporaril
    - Even if the code appears production-ready, you must analyze and identify unrelated blocks
    - If you cannot find any unrelated code, explicitly state 'No unrelated code found' with reasoning
    - Do NOT make assumptions about whether this step should be skipped
-
-   Purpose: Comment out ALL code unrelated to target AWS SDK operation to enable focused testing
 
    **Strict mode**: Only keep code DIRECTLY related to target AWS SDK operation data flow
 

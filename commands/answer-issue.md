@@ -31,9 +31,10 @@ Efficiently investigate and answer questions about structured GitHub issues with
    - Impact assessment: "影響範囲", "副作用"
    - General questions: その他の質問
 5. Use appropriate tools efficiently:
-   - For file/code location: Task tool with subagent_type=Explore (NOT direct Grep/Glob)
-   - For code reading: Read tool
-   - For log analysis: Grep tool with specific patterns
+   - For codebase exploration (finding files by concept/feature): Use Task tool with subagent_type=Explore
+   - For specific file/function search (known name): Use Grep/Glob directly
+   - For reading file contents: Use Read tool
+   - For log pattern analysis: Use Grep tool with specific patterns
 6. Provide structured answer:
    ```
    ## 調査結果
@@ -53,7 +54,8 @@ Efficiently investigate and answer questions about structured GitHub issues with
 ## Efficiency Guidelines
 
 - Investigate and answer only (do not implement fixes unless explicitly requested)
-- Use Task tool with subagent_type=Explore for codebase exploration (NOT direct Grep/Glob for open-ended searches)
+- Use Task tool with subagent_type=Explore for codebase exploration when searching by concept (NOT when searching for specific known names)
+- Use Grep/Glob directly when searching for specific file names, function names, or class names
 - Provide file:line references for easy navigation
 - Read only relevant files (leverage structured issue context to narrow scope)
 - Do not run unnecessary tests or build commands
