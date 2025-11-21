@@ -4,15 +4,20 @@ Output language: Japanese, formal business tone
 
 ## Command Purpose
 
-This command **actually tests** AWS connections after AWS SDK Go v1→v2 migration by automatically executing:
+This command **actually tests** AWS connections after AWS SDK Go v1→v2 migration by **temporarily modifying migrated code** for focused testing:
 
-1. Extract and analyze migrated functions
-2. Generate test data and pre-insert to DynamoDB/S3
-3. Mock external APIs (data source replacement)
-4. **Apply actual code modifications** (automatic rewrite with Edit tool)
-5. Execute AWS SDK v2 API tests
+**Testing Workflow:**
+1. Extract and analyze migrated functions from current branch (already migrated to AWS SDK v2)
+2. **Temporarily comment out unrelated code** in call chains to isolate target AWS SDK operations (Phase 3)
+3. Generate minimal test data and pre-insert to DynamoDB/S3 (Phase 4)
+4. Verify AWS SDK v2 API calls work correctly
+5. **Revert all changes** with `git restore` after verification
 
-**Important**: This command does not just analyze - it **actually modifies code**. Changes can be reverted with `git restore` if under Git management.
+**Important**:
+- This command **modifies production code temporarily** for testing purposes
+- All modifications are reversible with `git restore`
+- The goal is to verify AWS SDK v2 connections in isolation, not to create permanent test code
+- Phase 3 comment-out is a **required testing step**, not optional
 
 ## Prerequisites
 
