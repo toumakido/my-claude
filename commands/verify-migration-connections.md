@@ -42,7 +42,17 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
    - AWS service from import path (dynamodb, s3, ses, etc.)
    - Operation from client method name (PutItem, GetObject, etc.)
 
-   Step 2: For each function, trace ALL call chains using Grep:
+   Step 2: For each function, trace COMPLETE call chains including entry point using Grep:
+
+   Entry point identification:
+   - API handlers: Extract HTTP method and route path from router definition
+     - Search for route registration: router.POST, router.GET, http.HandleFunc, etc.
+     - Extract full path: /v1/resources, /api/v2/items, etc.
+   - Task entry points: Extract command/binary name from cmd/ directory
+     - Example: cmd/process_task/main.go → process_task command
+   - CLI commands: Extract subcommand name and arguments
+
+   Call chain tracing:
    - Find entry points: `main\(`, `handler\(`, `ServeHTTP`, `Handle`
    - Search function references to trace call paths
    - Identify intermediate layers (usecase/service/repository/gateway)
@@ -50,6 +60,34 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
    - For each chain, count all AWS SDK v2 method calls within the chain
    - Mark chains with multiple SDK methods as high priority
    - Execute Grep searches in parallel for independent functions
+
+   Call chain format:
+   ```
+   [Entry Point]
+   → [Handler/Task file:line] HandlerMethod
+   → [Service file:line] ServiceMethod
+   → [Target file:line] TargetFunction
+   → AWS SDK v2 API (Operation)
+   ```
+
+   Example:
+   ```
+   POST /v1/entities
+   → internal/api/handler/v1/entity_handler.go:45 PostEntities
+   → internal/service/entity_service.go:123 CreateEntity
+   → internal/repository/entity_repo.go:78 SaveEntity
+   → DynamoDB PutItem
+   ```
+
+   If call chain cannot be traced to entry point:
+   - Mark function as "SKIP - No entry point found"
+   - Exclude from optimal combination
+   - Do NOT include in verification output
+   - Log skipped functions for reference:
+     ```
+     スキップされた関数（呼び出し元不明）:
+     - internal/service/file.go:123 FunctionName
+     ```
 
    Step 3: Sort call chains by priority:
    1. First: Chains with multiple AWS SDK methods (higher priority)
@@ -62,7 +100,7 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
    - Chain with 1 SDK method, 2 hops
    - Chain with 1 SDK method, 4 hops (lowest)
 
-   Return: function list with all call chains sorted by priority."
+   Return: function list with all call chains sorted by priority, skipped functions list."
 
 3. **Group and deduplicate chains with Task tool** (subagent_type=general-purpose)
    Task prompt: "Group and deduplicate call chains to create optimal combination:
@@ -138,6 +176,11 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
    1. [file:line] | [function] | [operations] [markers]
    2. [file:line] | [function] | [operations] [markers]
    ...
+
+   検証方法のグループ化ポリシー:
+   - Phase 4の動作確認手順では、実行方法（API/Task）ごとにグループ化して出力
+   - 同じエンドポイント/タスクで確認できる複数の関数は、単一の実行コマンドにまとめて記載
+   - 関数ごとに重複した手順を出力しない
    ```
 
    B. Request batch approval with AskUserQuestion:
@@ -683,6 +726,86 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
     すべての処理が完了しました。
     ```
 
+16. **Generate AWS verification procedures section**
+
+    After final summary, output detailed AWS-specific verification procedures grouped by execution method:
+
+    ```markdown
+    ## AWS環境での動作確認方法
+
+    ### 検証ログあり（優先確認）
+
+    #### 1. [Execution Method] (例: POST /v1/entities, aws ecs run-task --task-definition process-data)
+    **検証内容**: [Summary of what is being verified]
+    **検証対象関数**:
+    - [file:line] FunctionName1 | [Operation1]
+    - [file:line] FunctionName2 | [Operation2]
+
+    **呼び出しチェーン**:
+    ```
+    [Entry Point]
+    → [Handler file:line] HandlerMethod
+    → [Service file:line] ServiceMethod
+    → [Target file:line] FunctionName1
+    → AWS SDK API (Operation1)
+    ```
+
+    **AWS環境での確認方法**:
+    ```bash
+    # Example: API call
+    curl -X POST https://api.example.com/v1/entities \
+      -H "Content-Type: application/json" \
+      -H "Cookie: jwt=<token>" \
+      -d '{"param":"value"}'
+
+    # Or: ECS task
+    aws ecs run-task \
+      --cluster production-cluster \
+      --task-definition process-data:latest \
+      --launch-type FARGATE
+    ```
+
+    **CloudWatch Logs**: `/ecs/service-name` or `/aws/lambda/function-name`
+
+    **期待されるログ**:
+    ```
+    [INFO] Test records inserted: N match (should be retrieved), M non-match (should be excluded)
+    [INFO] FunctionName1 returned N records (expected: N)
+    ```
+
+    **X-Ray確認ポイント**:
+    - [Service] [Operation1] × N回
+    - [Service] [Operation2] × M回
+    - FilterExpressionが正しく動作（該当する場合）
+    ```
+
+    ### Verification Method Grouping Policy
+
+    Group verification methods by execution method, not by function:
+
+    **Good (execution method-based)**:
+    ```
+    ### API Method: POST /v1/entities
+    Verifies: FunctionA (PutItem), FunctionB (Query)
+
+    curl -X POST https://api.example.com/v1/entities ...
+    ```
+
+    **Bad (function-based, duplicates commands)**:
+    ```
+    ### FunctionA
+    curl -X POST https://api.example.com/v1/entities ...
+
+    ### FunctionB
+    curl -X POST https://api.example.com/v1/entities ...
+    ```
+
+    When multiple functions share the same API/task:
+    1. Group them under single execution method
+    2. List all verified functions with their operations
+    3. Provide single execution command
+    4. Document expected outcomes for each function
+
 ## Output Format
 
 ### Optimal Combination (Phase 1)
@@ -845,6 +968,22 @@ _, err := client.PutItem(ctx, &dynamodb.PutItemInput{
 - Identify region configuration (explicit config or AWS_REGION env var)
 - Summarize v1 → v2 migration patterns clearly
 - Provide actionable AWS console verification steps
+
+### Output Focus Guidelines
+
+**Include (AWS-specific verification)**:
+- AWS API endpoints for verification
+- ECS task run commands with aws-cli
+- CloudWatch Logs log group names
+- X-Ray trace points
+- Expected AWS SDK call sequences
+
+**Exclude (non-AWS or environment setup)**:
+- Local development setup (Docker Compose, DynamoDB Local)
+- Environment variable configuration (.env files)
+- General prerequisites (Go version, make commands)
+- Authentication setup procedures
+- Repository cloning or dependency installation
 
 ### Critical Process Steps
 Detailed instructions are in Process section above. Key requirements:
