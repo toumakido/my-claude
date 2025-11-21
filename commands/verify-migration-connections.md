@@ -1,23 +1,31 @@
-Interactively analyze AWS SDK migration function by function
+Verify AWS SDK v2 migration by temporarily modifying code for focused testing
 
 Output language: Japanese, formal business tone
 
 ## Command Purpose
 
-This command **actually tests** AWS connections after AWS SDK Go v1→v2 migration by **temporarily modifying migrated code** for focused testing:
+This command **prepares code for AWS SDK v2 connection testing** by **temporarily modifying migrated code** to enable focused verification:
 
-**Testing Workflow:**
-1. Extract and analyze migrated functions from current branch (already migrated to AWS SDK v2)
-2. **Temporarily comment out unrelated code** in call chains to isolate target AWS SDK operations (Phase 3)
-3. Generate minimal test data and pre-insert to DynamoDB/S3 (Phase 4)
-4. Verify AWS SDK v2 API calls work correctly
-5. **Revert all changes** with `git restore` after verification
+**What this command does:**
+1. **Extract and analyze** migrated functions from current branch (already migrated to AWS SDK v2)
+2. **Comment out unrelated code** in call chains to isolate target AWS SDK operations (Phase 3)
+   - Removes other AWS SDK calls, external APIs, logging, metrics, etc.
+   - Keeps only the data flow directly related to target AWS SDK operation
+   - **Why necessary**: Prevents unrelated code from interfering with targeted AWS SDK testing
+3. **Generate minimal test data** and pre-insert code to DynamoDB/S3 (Phase 4)
+4. **Output verification procedures** for AWS environment testing (Phase 5)
+
+**What you need to do after this command:**
+1. Review modified files in git diff
+2. Deploy modified code to AWS test environment
+3. Execute verification procedures from Step 14 output
+4. **Manually run `git restore .` to revert all changes** after verification completes
 
 **Important**:
-- This command **modifies production code temporarily** for testing purposes
-- All modifications are reversible with `git restore`
-- The goal is to verify AWS SDK v2 connections in isolation, not to create permanent test code
-- Phase 3 comment-out is a **required testing step**, not optional
+- This command **modifies production code** in your local working tree
+- Changes are **NOT automatically reverted** - you must run `git restore .` manually
+- The goal is to create a testable state, not permanent test code
+- Phase 3 comment-out is **required** to isolate AWS SDK operations for testing
 
 ## Prerequisites
 
@@ -236,9 +244,8 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
 ### Phase 3: Comment-out Unrelated Code
 
 **IMPORTANT**: This phase MUST be executed for ALL chains. Do NOT skip this phase.
-- This modifies production code temporarily for AWS SDK verification
-- Changes are reversible with `git restore`
-- The purpose is to isolate AWS SDK operation for focused testing
+- Purpose: Isolate target AWS SDK operation by removing unrelated code that would interfere with testing
+- This ensures only the target AWS SDK call executes during verification
 
 6. **Comment out unrelated code in call chain functions (strict mode)**
 
@@ -501,7 +508,11 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
 
     コンパイル: 成功P個 / 失敗Q個
 
-    次: Step 14でAWS環境での動作確認手順を出力
+    次のステップ:
+    1. Step 14でAWS環境での動作確認手順を出力
+    2. git diffで変更内容を確認
+    3. AWS環境で検証実行
+    4. 完了後に `git restore .` で変更を戻す
     ```
 
 14. **Generate AWS verification procedures section**
