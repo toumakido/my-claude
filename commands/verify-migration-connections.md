@@ -42,7 +42,17 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
    - AWS service from import path (dynamodb, s3, ses, etc.)
    - Operation from client method name (PutItem, GetObject, etc.)
 
-   Step 2: For each function, trace ALL call chains using Grep:
+   Step 2: For each function, trace COMPLETE call chains including entry point using Grep:
+
+   Entry point identification:
+   - API handlers: Extract HTTP method and route path from router definition
+     - Search for route registration: router.POST, router.GET, http.HandleFunc, etc.
+     - Extract full path: /v1/resources, /api/v2/items, etc.
+   - Task entry points: Extract command/binary name from cmd/ directory
+     - Example: cmd/process_task/main.go → process_task command
+   - CLI commands: Extract subcommand name and arguments
+
+   Call chain tracing:
    - Find entry points: `main\(`, `handler\(`, `ServeHTTP`, `Handle`
    - Search function references to trace call paths
    - Identify intermediate layers (usecase/service/repository/gateway)
@@ -50,6 +60,34 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
    - For each chain, count all AWS SDK v2 method calls within the chain
    - Mark chains with multiple SDK methods as high priority
    - Execute Grep searches in parallel for independent functions
+
+   Call chain format:
+   ```
+   [Entry Point]
+   → [Handler/Task file:line] HandlerMethod
+   → [Service file:line] ServiceMethod
+   → [Target file:line] TargetFunction
+   → AWS SDK v2 API (Operation)
+   ```
+
+   Example:
+   ```
+   POST /v1/entities
+   → internal/api/handler/v1/entity_handler.go:45 PostEntities
+   → internal/service/entity_service.go:123 CreateEntity
+   → internal/repository/entity_repo.go:78 SaveEntity
+   → DynamoDB PutItem
+   ```
+
+   If call chain cannot be traced to entry point:
+   - Mark function as "SKIP - No entry point found"
+   - Exclude from optimal combination
+   - Do NOT include in verification output
+   - Log skipped functions for reference:
+     ```
+     スキップされた関数（呼び出し元不明）:
+     - internal/service/file.go:123 FunctionName
+     ```
 
    Step 3: Sort call chains by priority:
    1. First: Chains with multiple AWS SDK methods (higher priority)
@@ -62,7 +100,7 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
    - Chain with 1 SDK method, 2 hops
    - Chain with 1 SDK method, 4 hops (lowest)
 
-   Return: function list with all call chains sorted by priority."
+   Return: function list with all call chains sorted by priority, skipped functions list."
 
 3. **Group and deduplicate chains with Task tool** (subagent_type=general-purpose)
    Task prompt: "Group and deduplicate call chains to create optimal combination:
@@ -138,6 +176,11 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
    1. [file:line] | [function] | [operations] [markers]
    2. [file:line] | [function] | [operations] [markers]
    ...
+
+   検証方法のグループ化ポリシー:
+   - Phase 4の動作確認手順では、実行方法（API/Task）ごとにグループ化して出力
+   - 同じエンドポイント/タスクで確認できる複数の関数は、単一の実行コマンドにまとめて記載
+   - 関数ごとに重複した手順を出力しない
    ```
 
    B. Request batch approval with AskUserQuestion:
@@ -227,23 +270,134 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
 
    Return: Filter pattern, complexity level, test data strategy (comprehensive/minimal/skip), match record count, non-match record count, rationale."
 
-8. **Identify data source access with Task tool** (subagent_type=general-purpose)
-   Task prompt: "In function [function_name] at [file_path:line_number], identify ALL data source access BEFORE AWS SDK calls using Read:
+8. **Identify data source access in entire call chain with Task tool** (subagent_type=general-purpose)
+   Task prompt: "For call chain [entry_point → ... → target_function] from step 2, identify ALL data source access in ALL functions in the chain.
 
-   Search patterns:
-   - Repository/gateway calls: `repo\.\|gateway\.\|[A-Z][a-z]*Repository\|[A-Z][a-z]*Gateway`
-   - Database: `db\.Query\|db\.Exec\|\.Scan\|\.QueryRow`
-   - HTTP: `client\.Get\|client\.Post\|http\.Do`
-   - File: `os\.ReadFile\|ioutil\.ReadFile\|os\.Open`
-   - Cache: `cache\.Get\|redis\.Get`
+   **Purpose**: Enable end-to-end execution from entry point to AWS SDK call by mocking all data sources in the call chain.
 
-   For each match, extract:
-   - Line number
-   - Method signature or function call
-   - Variable name storing result
-   - Return type from function declaration or type inference
+   **Target functions**: All functions in the call chain from [selected_chain]
+   - Entry point (handler/main)
+   - All intermediate functions (usecase/service)
+   - Target function (repository/gateway with AWS SDK call)
 
-   Return: list with line numbers, calls, variables, types."
+   **For each function in the chain (process in order: entry → target)**:
+
+   1. Use Read to load function source code
+
+   2. Identify data source access BEFORE passing control to next function in chain:
+      Search patterns:
+      - Repository/gateway calls: `repo\.\|gateway\.\|[A-Z][a-z]*Repository\|[A-Z][a-z]*Gateway`
+      - Database: `db\.Query\|db\.Exec\|\.Scan\|\.QueryRow`
+      - HTTP: `client\.Get\|client\.Post\|http\.Do`
+      - File: `os\.ReadFile\|ioutil\.ReadFile\|os\.Open`
+      - Cache: `cache\.Get\|redis\.Get`
+
+   3. For each data source access, extract:
+      - Function name where data source is called
+      - File path and line number
+      - Data source method signature
+      - Variable name storing result
+      - Return type from function declaration
+
+   4. Identify downstream usage patterns of mocked data within the same function:
+      **Validation patterns**:
+      - validator.Validate(), obj.Validate(), ValidateXXX()
+      - Struct tag validation (to be checked in step 9)
+
+      **Business logic patterns**:
+      - Length/nil checks: `len(x) == 0`, `x == nil`, `x != nil`
+      - Range checks: `x > max`, `x < min`
+      - Conditional logic using mocked data
+
+      **Function argument patterns**:
+      - Mocked data passed to next function in call chain
+      - Mocked data fields used in function arguments
+
+   5. Classify complexity for each downstream usage:
+      **Simple** (generate mock data that passes):
+      - Single validation tag: `validate:\"required\"`, `validate:\"email\"`
+      - Simple nil/length check: `if x == nil`, `if len(x) == 0`
+      - Simple range check: `if x < 100`
+
+      **Complex** (consider commenting out):
+      - Multiple validation rules: `validate:\"required,email,min=5,max=100\"`
+      - Custom validators with complex logic
+      - Nested validation across multiple objects
+      - Complex business logic with multiple conditions
+
+      **Argument** (must generate valid data):
+      - Data passed to next function in chain (required for chain to proceed)
+
+   6. Determine mock strategy for each data source:
+      - If downstream usage is Simple + Argument: Generate valid mock data
+      - If downstream usage is Complex: Attempt valid data, fallback to commenting out validation
+      - If only Argument (no validation/logic): Generate minimal valid data for next function
+
+   Return format for entire call chain:
+   ```
+   Call chain: [entry_point] → [intermediate_functions] → [target_function]
+
+   Data sources to mock (in order):
+
+   1. [function_name_1]:[line_number]
+      File: [file_path]
+      Call: [data_source_call]
+      Variable: [variable_name]
+      Type: [return_type]
+      Downstream usage:
+        - [validation/logic description] at line [line] [Simple/Complex]
+        - Passed to [next_function] at line [line] [Argument]
+      Mock strategy: [Generate valid data / Comment out validation / etc.]
+
+   2. [function_name_2]:[line_number]
+      ...
+
+   Summary:
+   - Total data sources: N
+   - Entry point: X data sources
+   - Intermediate functions: Y data sources
+   - Target function: Z data sources
+   ```
+
+   Example output:
+   ```
+   Call chain: POST /v1/entities → handler.PostEntities → service.CreateEntity → repo.SaveEntity
+
+   Data sources to mock (in order):
+
+   1. handler.PostEntities:45
+      File: internal/handler/entity.go
+      Call: h.userRepo.GetCurrentUser(ctx)
+      Variable: user
+      Type: *User
+      Downstream usage:
+        - validator.Validate(user) at line 50 [Simple - single validation tag]
+        - Passed to service.CreateEntity at line 55 [Argument]
+      Mock strategy: Generate valid data satisfying validation
+
+   2. service.CreateEntity:78
+      File: internal/service/entity.go
+      Call: s.configRepo.GetConfig(ctx)
+      Variable: config
+      Type: *Config
+      Downstream usage:
+        - if config.MaxItems < user.ItemCount at line 82 [Simple - range check]
+        - Passed to repo.SaveEntity at line 90 [Argument]
+      Mock strategy: Generate valid data satisfying business logic
+
+   3. repo.SaveEntity:120
+      File: internal/repository/entity.go
+      Call: (none - this function only calls AWS SDK)
+      Mock strategy: No mocking needed in this function
+
+   Summary:
+   - Total data sources: 2
+   - Entry point: 1 data source
+   - Intermediate functions: 1 data source
+   - Target function: 0 data sources
+   ```
+
+   Return: Complete list of data sources across entire call chain with usage patterns and mock strategies."
 
 8.5. **Analyze downstream processing with Task tool** (subagent_type=general-purpose)
    Task prompt: "Analyze ALL code after AWS SDK calls in [function_name] at [file_path:line_number] to identify required fields:
@@ -340,14 +494,16 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
 
    Purpose: Prevent compilation errors from incorrect type assumptions
 
+   **Target types**: All return types from data sources identified across entire call chain (from step 8)
+
    1. Find and read model definition files using Glob + Read:
       - Search for `type.*struct` in `model.go`, `models.go`, `types.go`, `entity.go`, `dto.go`
-      - Search in same directory as [file_path] and parent directories (use parallel Glob searches)
+      - Search in directories containing functions from call chain (use parallel Glob searches)
       - Check return types in function signatures
       - After identifying all model files: READ each file before proceeding to step 2
       - **Critical**: Never assume field names or types - always read actual file contents
 
-   2. Extract type information for each data source return type (from step 8):
+   2. Extract type information for each data source return type across call chain (from step 8):
       - Struct fields and their types (including pointer types: `*string`, `*int64`, `*bool`)
       - Slice element types (distinguish `[]*Type` vs `[]Type`)
       - Map key/value types
@@ -396,12 +552,175 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
    - Required imports list with full package paths
    - Initialization examples for each struct type"
 
-10. **Generate test data and pre-insert code with Task tool** (subagent_type=general-purpose)
-   Task prompt: "Generate test data and code modifications using validated type information from step 9 and field requirements from step 8.5:
+10. **Generate test data and code modifications for entire call chain with Task tool** (subagent_type=general-purpose)
+   Task prompt: "Generate mock data and code modifications for ALL data sources across entire call chain.
 
-   Part A - Data source access replacement (from step 8):
-   For each data source access:
-   1. Generate COMPLETE test data (COMPLETE = satisfying all 5 priority levels below) prioritizing by field requirements:
+   **Input from previous steps**:
+   - Call chain structure (from step 2)
+   - Data sources in each function with usage patterns and strategies (from step 8)
+   - Type information for all mocked types (from step 9)
+   - Downstream processing requirements for target function (from step 8.5)
+
+   **Process data sources in order: entry point → intermediate → target**
+
+   Part A - Mock data generation for call chain data sources (from step 8):
+
+   For each data source in call chain:
+
+   1. Determine mock data requirements based on downstream usage (from step 8):
+
+      **Strategy 1: Generate valid mock data** (Simple validation/logic + Argument)
+      - Downstream has simple validation (single tag, simple check)
+      - Data passed to next function in chain (required for execution)
+      - Generate data that satisfies validation and business logic
+
+      Example fields to satisfy:
+      - `validate:"required"` → non-nil, non-empty value
+      - `validate:"email"` → valid email format (e.g., "test@example.com")
+      - `validate:"min=1,max=100"` → value within range (e.g., 50)
+      - `if len(items) == 0` → non-empty slice
+      - `if config.MaxItems < count` → config.MaxItems > expected count
+
+      **Strategy 2: Generate valid data + comment out complex validation** (Complex validation)
+      - Downstream has complex validation (multiple rules, custom validator)
+      - Attempt to generate valid data for known patterns
+      - If validation is too complex to satisfy: mark validation code for commenting out
+      - Document: `// TODO: Complex validation commented out - verify manually if needed`
+
+      **Strategy 3: Generate minimal data** (Only Argument, no validation/logic)
+      - Data only used as argument to next function
+      - No validation or business logic in current function
+      - Generate minimal valid data structure
+
+   2. Build complete mock data using type information (from step 9):
+
+      For call chain data sources, prioritize fields by usage:
+
+      **Priority 1: Fields used in next function call** (chain progression)
+      - Fields passed to next function in chain
+      - Fields used in AWS SDK call (if target function)
+      - Must be set with realistic values
+
+      **Priority 2: Fields required by validation** (from step 8)
+      - Fields with `validate:` struct tags
+      - Fields checked by validator.Validate()
+      - Must satisfy validation rules if Strategy 1
+
+      **Priority 3: Fields required by business logic** (from step 8)
+      - Fields used in conditional checks (len, nil, range)
+      - Must satisfy business logic to avoid early return
+
+      **Priority 4: CRITICAL/HIGH fields from target function** (from step 8.5, target only)
+      - Nil pointer dereference without guards
+      - Fields used in loops/iterations
+      - Must be non-nil with realistic values
+
+      **Priority 5: OPTIONAL fields**
+      - Fields with safe nil handling
+      - Set for completeness but not critical
+
+   3. Generate mock data with correct types (from step 9):
+      - Match struct field names exactly
+      - Use pointer types where required: `aws.String()`, `aws.Int64()`, `aws.Bool()`
+      - Initialize slices as non-nil: `[]Type{}` or `[]*Type{{...}}`
+      - Match slice element types: `[]*Type` vs `[]Type`
+
+   4. Add descriptive comment for each mock data:
+      ```go
+      // Mock data for [function_name] at [file:line]
+      // Original: [original_data_source_call]
+      // Satisfies: [validation/logic requirements]
+      // Used in: [next function in chain]
+      ```
+
+   5. Generate code modification for each data source:
+
+      **Case A: Simple validation (Strategy 1)**
+      ```go
+      // Original code:
+      user, err := h.userRepo.GetCurrentUser(ctx)
+      if err != nil {
+          return err
+      }
+      if err := validator.Validate(user); err != nil {
+          return err
+      }
+
+      // Modified code:
+      // Mock data for handler.PostEntities at handler.go:45
+      // Original: h.userRepo.GetCurrentUser(ctx)
+      // Satisfies: validator.Validate (required, email)
+      // Used in: service.CreateEntity
+      // user, err := h.userRepo.GetCurrentUser(ctx)
+      // if err != nil {
+      //     return err
+      // }
+      user := &User{
+          ID:    "test-001",
+          Email: "test@example.com",  // validate:"required,email"
+          Name:  "Test User",          // validate:"required"
+      }
+
+      // Keep validation (mock data satisfies rules)
+      if err := validator.Validate(user); err != nil {
+          return err
+      }
+      ```
+
+      **Case B: Complex validation (Strategy 2)**
+      ```go
+      // Modified code:
+      // Mock data for service.CreateEntity at service.go:78
+      // Original: s.configRepo.GetConfig(ctx)
+      // Satisfies: Attempt to satisfy complex validation
+      // Used in: repo.SaveEntity
+      // config, err := s.configRepo.GetConfig(ctx)
+      // if err != nil {
+      //     return err
+      // }
+      config := &Config{
+          MaxItems: 1000,
+          Timeout:  30,
+      }
+
+      // Complex validation commented out - manual verification may be needed
+      // if err := s.complexValidator.ValidateConfig(config); err != nil {
+      //     return err
+      // }
+      ```
+
+      **Case C: Business logic only (Strategy 1)**
+      ```go
+      // Modified code:
+      // Mock data for service.ProcessItems at service.go:120
+      // Original: s.itemRepo.GetItems(ctx)
+      // Satisfies: len(items) > 0 check at line 125
+      // Used in: repo.SaveItems
+      // items, err := s.itemRepo.GetItems(ctx)
+      // if err != nil {
+      //     return err
+      // }
+      items := []*Item{
+          {ID: "item-001", Name: "Test Item"},
+      }
+
+      // Keep business logic (mock data satisfies check)
+      if len(items) == 0 {
+          return errors.New("no items")
+      }
+      ```
+
+   6. Include all required imports:
+      - Add missing imports from step 9 to import block
+      - Example: `"github.com/aws/aws-sdk-go-v2/aws"`
+
+   Part B - AWS SDK pre-insert code for target function (from step 7 and step 7.5):
+
+   If AWS operation type is Read or Delete:
+
+   **Use test data strategy from step 7.5 to determine record counts**
+
+   1. Generate COMPLETE test data for Pre-insert (satisfying all 5 priority levels from step 8.5):
 
       **Priority 1: AWS SDK parameter fields** (from step 7)
       - Fields used in AWS SDK call parameters (e.g., Key, FilterExpression values)
@@ -474,21 +793,7 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
       // Business logic: Balance (range:0-10000000)
       ```
 
-   4. Include all required imports in new_string:
-      - Add missing imports from step 9 to import block
-      - Example: `\"github.com/aws/aws-sdk-go-v2/aws\"`, `\"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue\"`
-
-   5. Generate code modification:
-      - Comment out original call with `//`
-      - Assign test data to same variable
-      - Preserve all downstream logic
-
-   Part B - AWS SDK pre-insert code (from step 7 and step 7.5):
-   If AWS operation type is Read or Delete:
-
-   **Use test data strategy from step 7.5 to determine record counts**
-
-   1. Generate BOTH matching and non-matching test records:
+   2. Generate BOTH matching and non-matching test records:
 
       **Matching records** (should be retrieved by filter):
       - Generate N records based on step 7.5 strategy (e.g., 1-2 for minimal, 2-3 for comprehensive)
@@ -517,7 +822,7 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
       - Timestamps: Include out-of-range values if filter uses `<=`, `>=`, `BETWEEN`
       - NULL types: Consider SDK v1 migration scenarios where NULL handling may differ
 
-   2. Generate Pre-insert code for both record sets:
+   3. Generate Pre-insert code for both record sets:
       - For GetItem/Scan/Query: generate PutItem for each test record (matching + non-matching)
       - For GetObject: generate PutObject with same key
       - For DeleteItem: generate PutItem with same key
@@ -530,36 +835,88 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
         // Non-matching records: 2 (should be excluded)
         ```
 
-   3. Identify insertion point:
+   4. Identify insertion point:
       - Line number just before AWS SDK Read/Delete operation
       - Preserve indentation
 
-   Return:
-   - Data source replacements: [original code (commented), test assignment code with imports]
-   - Pre-insert code (if AWS operation is Read/Delete): [pre-insert code with match/non-match records, match count, non-match count, insertion line number]"
+   Return format:
+   ```
+   Call chain mock data modifications:
 
-11. **Apply code modifications with Edit tool**
+   Entry point function ([function_name] at [file:line]):
+   - Data source: [original_call]
+   - Variable: [variable_name]
+   - Mock strategy: [Strategy 1/2/3]
+   - Original code: [code to be commented]
+   - Mock code: [mock assignment code]
+   - Validation handling: [Keep / Comment out]
+   - Required imports: [import list]
 
-   **Important**: This step applies actual code changes. This is not just analysis.
+   Intermediate function ([function_name] at [file:line]):
+   - Data source: [original_call]
+   - Variable: [variable_name]
+   - Mock strategy: [Strategy 1/2/3]
+   - Original code: [code to be commented]
+   - Mock code: [mock assignment code]
+   - Business logic handling: [Keep / Comment out]
+   - Required imports: [import list]
 
-   Part A - Replace data source access (from step 10 Part A):
-   For each data source access identified in step 8:
-   - Use Edit tool to replace original data source call with test data
-   - old_string: exact original code from function
-   - new_string: test data assignment preserving downstream logic
-   - If multiple data sources: apply edits sequentially
-   - Output: "データソース書き換え完了: [file_path:line_number]"
+   Target function ([function_name] at [file:line]):
+   - Data source: [if any]
+   - Pre-insert code: [code for Read/Delete operations]
+   - Pre-insert position: [line before AWS SDK call]
+   - Match record count: N
+   - Non-match record count: M
+   - Required imports: [import list]
+   ```
 
-   Part B - Insert pre-insert code (from step 10 Part B):
+   Return: Complete list of code modifications for entire call chain (entry → target) with mock strategies and validation handling."
+
+11. **Apply code modifications across entire call chain with Edit tool**
+
+   **Important**: This step applies actual code changes to ALL functions in call chain. This is not just analysis.
+
+   **Process functions in order: entry point → intermediate → target**
+
+   Part A - Replace data source access across call chain (from step 10 Part A):
+
+   For each data source in call chain (from step 8):
+
+   1. Use Edit tool to replace original code with mock data:
+      - old_string: Complete original code block including:
+        - Data source call
+        - Error handling
+        - Validation/business logic (to be kept or commented)
+      - new_string: Modified code block including:
+        - Commented original data source call
+        - Commented error handling
+        - Mock data assignment with descriptive comment
+        - Validation/business logic (kept or commented based on step 10 strategy)
+      - Output: "データソース書き換え完了: [function_name] [file_path:line_number]"
+
+   2. Apply edits sequentially in call chain order (entry → target):
+      - Entry point edits first
+      - Intermediate function edits second
+      - Target function data source edits last (if any)
+
+   Example edit sequence:
+   ```
+   データソース書き換え完了: handler.PostEntities internal/handler/entity.go:45
+   データソース書き換え完了: service.CreateEntity internal/service/entity.go:78
+   データソース書き換え完了: repository.SaveEntity internal/repository/entity.go:120 (if data source exists)
+   ```
+
+   Part B - Insert pre-insert code in target function (from step 10 Part B):
+
    If AWS operation type is Read or Delete:
    - Use Edit tool to insert pre-insert code before AWS SDK operation
    - Identify the line before AWS SDK call using line number from step 10
    - old_string: line before AWS SDK operation (preserve exact indentation)
    - new_string: line before AWS SDK operation + "\n" + pre-insert code (with proper indentation)
-   - Output: "Pre-insertコード追加: [file_path:line_number]"
+   - Output: "Pre-insertコード追加: [target_function] [file_path:line_number]"
    - Add comment above pre-insert code: "// Pre-insert: test data for [operation_name]"
 
-   Part C - Add verification logging (from step 9 and step 10):
+   Part C - Add verification logging in target function (from step 9 and step 10):
    For Read operations (Scan, Query, GetItem, GetObject):
    - Use Edit tool to insert logging code after AWS SDK Read operation
    - Extract key fields from type information (step 9)
@@ -623,17 +980,33 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
 13. **Output detailed report**
     Generate report for selected function with:
     - File path and function name
-    - Complete call chain
+    - **Complete call chain with mock locations**:
+      ```
+      [Entry Point]
+      → [Handler file:line] HandlerMethod [Mocked: data_source_1]
+      → [Service file:line] ServiceMethod [Mocked: data_source_2]
+      → [Target file:line] TargetFunction [AWS SDK: Operation]
+      ```
+      Example:
+      ```
+      POST /v1/entities
+      → internal/handler/entity.go:45 PostEntities [Mocked: userRepo.GetCurrentUser]
+      → internal/service/entity.go:78 CreateEntity [Mocked: configRepo.GetConfig]
+      → internal/repository/entity.go:120 SaveEntity [AWS SDK: DynamoDB PutItem]
+      ```
     - AWS operation type (Read/Delete/Write) and operation name
     - AWS service and resource details
     - Migration changes summary
-    - Applied code modifications:
-      - Data source replacements (if any)
-      - Pre-insert code (if AWS operation is Read/Delete)
-      - Verification logging (if AWS operation is Read)
+    - Applied code modifications across call chain:
+      - **Entry point modifications**: Data source mock, validation handling
+      - **Intermediate function modifications**: Data source mock, business logic handling
+      - **Target function modifications**:
+        - Data source mock (if any)
+        - Pre-insert code (if AWS operation is Read/Delete)
+        - Verification logging (if AWS operation is Read)
     - Compilation status
     - AWS console verification steps
-    - Git diff summary showing changes
+    - Git diff summary showing changes across all modified files
 
 14. **Output brief summary for current chain**
     ```
@@ -672,16 +1045,86 @@ This command **actually tests** AWS connections after AWS SDK Go v1→v2 migrati
     検証ログ: 合計L個
     コンパイル: 成功P個 / 失敗Q個
 
-    次のステップ:
-    1. git diff で変更内容を確認
-    2. コンパイルエラーがある場合は修正
-    3. アプリケーションを実行してAWS接続をテスト
-    4. ログ出力から取得レコード数と内容を確認
-    5. CloudWatchログで各API呼び出しを確認
-    6. 必要に応じてテストデータを調整
-
     すべての処理が完了しました。
     ```
+
+16. **Generate AWS verification procedures section**
+
+    After final summary, output detailed AWS-specific verification procedures grouped by execution method:
+
+    ```markdown
+    ## AWS環境での動作確認方法
+
+    ### 検証ログあり（優先確認）
+
+    #### 1. [Execution Method] (例: POST /v1/entities, aws ecs run-task --task-definition process-data)
+    **検証内容**: [Summary of what is being verified]
+    **検証対象関数**:
+    - [file:line] FunctionName1 | [Operation1]
+    - [file:line] FunctionName2 | [Operation2]
+
+    **呼び出しチェーン**:
+    ```
+    [Entry Point]
+    → [Handler file:line] HandlerMethod
+    → [Service file:line] ServiceMethod
+    → [Target file:line] FunctionName1
+    → AWS SDK API (Operation1)
+    ```
+
+    **AWS環境での確認方法**:
+    ```bash
+    # Example: API call
+    curl -X POST https://api.example.com/v1/entities \
+      -H "Content-Type: application/json" \
+      -H "Cookie: jwt=<token>" \
+      -d '{"param":"value"}'
+
+    # Or: ECS task
+    aws ecs run-task \
+      --cluster production-cluster \
+      --task-definition process-data:latest \
+      --launch-type FARGATE
+    ```
+
+    **期待されるログ**:
+    ```
+    [INFO] Test records inserted: N match (should be retrieved), M non-match (should be excluded)
+    [INFO] FunctionName1 returned N records (expected: N)
+    ```
+
+    **X-Ray確認ポイント**:
+    - [Service] [Operation1] × N回
+    - [Service] [Operation2] × M回
+    - FilterExpressionが正しく動作（該当する場合）
+    ```
+
+    ### Verification Method Grouping Policy
+
+    Group verification methods by execution method, not by function:
+
+    **Good (execution method-based)**:
+    ```
+    ### API Method: POST /v1/entities
+    Verifies: FunctionA (PutItem), FunctionB (Query)
+
+    curl -X POST https://api.example.com/v1/entities ...
+    ```
+
+    **Bad (function-based, duplicates commands)**:
+    ```
+    ### FunctionA
+    curl -X POST https://api.example.com/v1/entities ...
+
+    ### FunctionB
+    curl -X POST https://api.example.com/v1/entities ...
+    ```
+
+    When multiple functions share the same API/task:
+    1. Group them under single execution method
+    2. List all verified functions with their operations
+    3. Provide single execution command
+    4. Document expected outcomes for each function
 
 ## Output Format
 
@@ -798,7 +1241,6 @@ _, err := client.PutItem(ctx, &dynamodb.PutItemInput{
 
 **動作確認観点**:
 - AWSコンソール: [確認するサービス/リソース]
-- CloudWatchログ: [確認すべきAPIコール]
 - 設定確認: [region/endpoint/認証情報など]
 ```
 
@@ -829,10 +1271,8 @@ _, err := client.PutItem(ctx, &dynamodb.PutItemInput{
 データソースモック: 合計8個
 
 次のステップ:
-1. git diff で変更内容を確認
 2. アプリケーションを実行してAWS接続をテスト
-3. CloudWatchログで各API呼び出しを確認
-4. 必要に応じてテストデータを調整
+3. 必要に応じてテストデータを調整
 
 すべての処理が完了しました。
 ```
@@ -845,6 +1285,21 @@ _, err := client.PutItem(ctx, &dynamodb.PutItemInput{
 - Identify region configuration (explicit config or AWS_REGION env var)
 - Summarize v1 → v2 migration patterns clearly
 - Provide actionable AWS console verification steps
+
+### Output Focus Guidelines
+
+**Include (AWS-specific verification)**:
+- AWS API endpoints for verification
+- ECS task run commands with aws-cli
+- X-Ray trace points
+- Expected AWS SDK call sequences
+
+**Exclude (non-AWS or environment setup)**:
+- Local development setup (Docker Compose, DynamoDB Local)
+- Environment variable configuration (.env files)
+- General prerequisites (Go version, make commands)
+- Authentication setup procedures
+- Repository cloning or dependency installation
 
 ### Critical Process Steps
 Detailed instructions are in Process section above. Key requirements:
@@ -888,10 +1343,15 @@ Detailed instructions are in Process section above. Key requirements:
 ### Key Process Steps
 - **Deduplication** (step 3): Group by AWS_service + SDK_operation, ignore parameters. Select shortest chain from each group.
 - **Filter analysis** (step 7.5): Categorize filter complexity and determine test data strategy (comprehensive/minimal/skip) to avoid duplication.
-- **Downstream processing analysis** (step 8.5): Analyze code AFTER AWS SDK calls to identify field requirements (CRITICAL/HIGH/MEDIUM/OPTIONAL) and prevent runtime errors.
-- **Type validation** (step 9): Actually READ model files. Extract exact field names, pointer types, slice types, struct tags, validation rules.
-- **Test data generation** (step 10): Generate COMPLETE test data satisfying all field requirements (AWS SDK + downstream processing). Generate BOTH matching and non-matching records for Read/Delete operations.
-- **Code modifications** (step 11): Replace data sources, insert pre-insert code, add verification logging.
+- **Call chain data source identification** (step 8): Identify ALL data sources across ENTIRE call chain (entry point → intermediate → target). Classify downstream usage as Simple/Complex/Argument. Determine mock strategy for each data source.
+- **Downstream processing analysis** (step 8.5): Analyze code AFTER AWS SDK calls in target function to identify field requirements (CRITICAL/HIGH/MEDIUM/OPTIONAL) and prevent runtime errors.
+- **Type validation** (step 9): Actually READ model files for ALL types used across call chain. Extract exact field names, pointer types, slice types, struct tags, validation rules.
+- **Call chain mock data generation** (step 10): Generate mock data for ALL data sources across call chain with three strategies:
+  - Strategy 1: Generate valid data (simple validation + argument)
+  - Strategy 2: Generate data + comment out complex validation
+  - Strategy 3: Generate minimal data (argument only)
+  - For target function: Generate COMPLETE test data + Pre-insert code for Read/Delete operations
+- **Call chain code modifications** (step 11): Apply changes to ALL functions in call chain (entry → target). Replace data sources, handle validation/business logic, insert pre-insert code, add verification logging.
 - **Compilation and safety verification** (step 12): Run `go build`, fix errors automatically. Run `go vet` and `staticcheck` for static analysis. Document potential runtime risks.
 
 ### Output Guidelines
