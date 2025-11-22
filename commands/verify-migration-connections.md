@@ -411,18 +411,21 @@ This command **prepares code for AWS SDK v2 connection testing** by **temporaril
 
    C. **Apply comment-out modifications with Edit tool**
 
-   **CRITICAL**: Apply ALL modifications identified in step B. Do NOT skip this step.
-   - If step B returned 'No unrelated code found', output: "スキップ: コメントアウトするコードなし"
-   - Otherwise, apply ALL comment-out modifications as specified below
+   Check step B result and apply modifications:
 
-   For each function in call chain (process in order: entry → target):
+   1. If step B identified zero code blocks to comment out:
+      - Output: "スキップ: コメントアウトするコードなし"
+      - Proceed to step D (compilation verification)
 
-   1. For each code block identified as COMMENT:
-      - Use Edit tool to comment out the block
-      - old_string: original code block
-      - new_string: commented code with reason
-      - Use simple `//` line comments
-      - Add reason comment: `// Commented out for testing: [reason]`
+   2. If step B identified one or more code blocks to comment out:
+      - Apply ALL comment-out modifications as specified below
+      - For each function in call chain (process in order: entry → target):
+        - For each code block identified as COMMENT:
+          - Use Edit tool to comment out the block
+          - old_string: original code block
+          - new_string: commented code with reason
+          - Use simple `//` line comments
+          - Add reason comment: `// Commented out for testing: [reason]`
 
    Example:
    ```go
@@ -440,12 +443,12 @@ This command **prepares code for AWS SDK v2 connection testing** by **temporaril
    // }
    ```
 
-   2. Output after each edit:
+   3. Output after each edit:
       ```
       コメントアウト完了: [function_name] [file:line] (N blocks commented)
       ```
 
-   **Step 6.C.2: Replace commented-out code with dummy values**
+   D. **Replace commented-out code with dummy values**
 
    For each commented-out external API call that returns values used in target data flow:
 
@@ -494,7 +497,7 @@ This command **prepares code for AWS SDK v2 connection testing** by **temporaril
    - Document dummy values with inline comments (`// Dummy X for testing`)
    - If commented code doesn't return values or values aren't used: skip dummy value assignment
 
-   D. **Verify compilation after comment-out**
+   E. **Verify compilation after modifications**
       - Run: `go build -o /tmp/test-build 2>&1`
       - If compilation fails:
         - Analyze error: unused variables, undefined references
@@ -502,7 +505,7 @@ This command **prepares code for AWS SDK v2 connection testing** by **temporaril
         - Retry until compilation succeeds
       - Output: "コンパイル成功: [file_path]"
 
-   E. Display completion:
+   F. Display completion:
    ```
    完了 (i/N): コメントアウト処理
    - 処理した関数数: X個
@@ -510,7 +513,7 @@ This command **prepares code for AWS SDK v2 connection testing** by **temporaril
    - コンパイル: 成功
    ```
 
-   F. Proceed to next chain automatically
+   G. Proceed to next chain automatically
 
 ### Phase 4: Simplified Test Data Preparation
 
@@ -583,8 +586,12 @@ This command **prepares code for AWS SDK v2 connection testing** by **temporaril
 
    B. Verify compilation:
       - Run: `go build -o /tmp/test-build 2>&1`
-      - If fails: Fix imports/types and retry
-      - Output: "コンパイル成功"
+      - If fails:
+        - Analyze error messages
+        - Fix missing imports, type mismatches, undefined fields
+        - Retry Edit tool with corrections
+        - Repeat until compilation succeeds
+      - Output: "コンパイル成功: [file_path]"
 
    C. Display completion:
       ```
@@ -595,31 +602,13 @@ This command **prepares code for AWS SDK v2 connection testing** by **temporaril
 
    D. Proceed to next chain automatically
 
-11. **Verify compilation with Bash tool**
-
-   - Run: `go build -o /tmp/test-build 2>&1`
-   - If compilation fails:
-     - Analyze error messages
-     - Fix missing imports, type mismatches, undefined fields
-     - Retry Edit tool with corrections
-     - Repeat until compilation succeeds
-   - Output: "コンパイル成功: [file_path]"
-
-12. **Output brief summary for current chain**
-    ```
-    完了 (i/N): [file_path]
-    - AWS操作: [operation_type] ([operation_name])
-    - Pre-insertコード: 追加済み / 不要
-    - コンパイル: 成功 / 失敗
-    ```
-
-   Proceed to next chain automatically (no user interaction):
+11. **Proceed to next chain automatically**
    - If i < N: continue to next chain (repeat from step 6.A)
-   - If i = N: proceed to final summary
+   - If i = N: proceed to Phase 5
 
 ### Phase 5: Final Summary
 
-13. **Output final summary report**
+12. **Output final summary report**
     After processing all chains, display comprehensive summary:
 
     ```
@@ -644,13 +633,13 @@ This command **prepares code for AWS SDK v2 connection testing** by **temporaril
     コンパイル: 成功P個 / 失敗Q個
 
     次のステップ:
-    1. Step 14でAWS環境での動作確認手順を出力
+    1. Step 13でAWS環境での動作確認手順を出力
     2. git diffで変更内容を確認
     3. AWS環境で検証実行
     4. 完了後に `git restore .` で変更を戻す
     ```
 
-14. **Generate AWS verification procedures section**
+13. **Generate AWS verification procedures section**
 
     After final summary, output detailed AWS-specific verification procedures grouped by execution method:
 
@@ -821,7 +810,7 @@ This command **prepares code for AWS SDK v2 connection testing** by **temporaril
 
 コンパイル: 成功5個 / 失敗0個
 
-次: AWS環境での動作確認手順を参照（Step 14の出力）
+次: AWS環境での動作確認手順を参照（Step 13の出力）
 ```
 
 ## Analysis Requirements
