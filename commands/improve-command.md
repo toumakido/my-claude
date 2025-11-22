@@ -134,6 +134,120 @@ Output language: Japanese, formal business tone
    追加・削除・修正したい項目があれば教えてください。
    ```
 
+5.6. Apply generalization for private repositories (if applicable):
+
+   **Purpose**: Automatically generalize code examples and identifiers when working repository is private
+
+   **Actions**:
+   1. Check if working repository is private (already done in Step 3)
+   2. If private, apply generalization patterns to issue body:
+
+      **Automatic pattern matching and replacement**:
+
+      a. Function/method names:
+      ```
+      Pattern: CamelCase words ending in common suffixes
+      - *Repository → EntityRepository, DataRepository
+      - *Service → ProcessService, RecordService
+      - *Handler → RequestHandler, EventHandler
+      - *Manager → ResourceManager, StateManager
+      - Get*/Fetch*/Post*/Put*/Delete* → Generic verb prefixes
+      ```
+
+      b. Repository/Gateway/Client names:
+      ```
+      Pattern: Variable names ending in Repository/Gateway/Client
+      - [a-z]+Repository → entityRepo, dataRepo, recordRepo
+      - [a-z]+Gateway → apiGateway, serviceGateway
+      - [a-z]+Client → httpClient, grpcClient
+      ```
+
+      c. Method names with business domain terms:
+      ```
+      Pattern: Domain-specific verbs + nouns
+      - Register* → RegisterEntity, RegisterItem
+      - Process* → ProcessRecord, ProcessData
+      - Calculate* → CalculateValue, CalculateTotal
+      - Validate* → ValidateInput, ValidateData
+      ```
+
+      d. Preserve technical patterns:
+      ```
+      Keep as-is:
+      - AWS service names: DynamoDB, S3, Lambda, etc.
+      - Standard methods: GetItem, PutItem, Query, Scan
+      - Error handling: error, err, context.Context, ctx
+      - Common patterns: TransactWriteItems, FilterExpression
+      ```
+
+   3. Generate generalization mapping (example patterns only, not shown to user):
+      ```
+      Original → Generalized (maintain consistency)
+      - UserAccountRepository → EntityRepository
+      - FetchCustomerDetails → GetEntityDetails
+      - paymentGatewayClient → externalServiceClient
+      - calculateMonthlyFee → calculateValue
+      ```
+
+   4. Apply replacements to issue body using regex patterns
+   5. Maintain consistency: same term → same generic name throughout issue body
+   6. Track generalization count (functions, repositories, domain terms) for Step 5.7
+
+   **Implementation guideline**:
+   - Use regex patterns to detect domain-specific terms
+   - Preserve code structure and technical accuracy
+   - Do not generalize AWS service names or standard library functions
+   - Refer to "Code Example Generalization" section (lines 296-356) for detailed guidelines:
+     - **Level 1 (MUST generalize)**: Function names, variable names, type names, table names
+     - **Level 2 (SHOULD generalize)**: Business terms, service names, company-specific terms
+     - **Level 3 (MAY keep specific)**: FilterExpression structure, query patterns, AWS service names
+     - **Level 4 (MUST keep specific)**: Language keywords, standard library, common patterns
+
+5.7. Confirm generalized content with user (for private repositories):
+
+   **Purpose**: Ensure generalization is appropriate before creating public issue
+
+   **Actions**:
+   1. Display generalization summary:
+      ```
+      ## 一般化サマリー
+
+      privateリポジトリのため、以下の情報を一般化しました:
+
+      関数名: N箇所
+      Repository名: M箇所
+      ドメイン用語: K箇所
+
+      一般化後のissue本文を確認しますか？
+      ```
+
+   2. Use AskUserQuestion:
+      - question: "一般化されたissue内容を確認しますか？"
+      - header: "Generalization"
+      - multiSelect: false
+      - options:
+        - label: "確認する", description: "一般化後の全文を表示"
+        - label: "このまま作成", description: "一般化を信頼してissue作成"
+        - label: "キャンセル", description: "issue作成を中止"
+
+   3. Handle response:
+      - "確認する": Display generalized issue body in full, then ask "この内容でissueを作成してよろしいですか？" and wait for user approval
+      - "このまま作成": Proceed to Step 6
+      - "キャンセル": Exit with message "Issue作成をキャンセルしました"
+
+   **Example output**:
+   ```
+   ## 一般化サマリー
+
+   privateリポジトリのため、以下の情報を一般化しました:
+
+   関数名: 8箇所 (CreateEntity, UpdateEntity, etc.)
+   Repository名: 5箇所 (entityRepository, dataRepository, etc.)
+   ドメイン用語: 3箇所 (generic business terms)
+
+   一般化後のissue本文を確認しますか？
+   ```
+
 6. Create GitHub issue:
    - Determine target repository:
      - Check current repository: `gh repo view --json nameWithOwner -q .nameWithOwner`
