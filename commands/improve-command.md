@@ -40,10 +40,11 @@ Output language: Japanese, formal business tone
    - Additional questions needed during execution - count AskUserQuestion tool calls during command execution
    - Post-command fixes by user - commits/edits after command completion
 
-   **Check repository type** (for reference links in issue):
+   **Check repository type** (for reference links and generalization in later steps):
    - Run: `gh repo view --json isPrivate -q .isPrivate`
+   - Store result as `IS_PRIVATE` for use in Steps 5.6 and 5.7
    - If repository is public: Collect PR/commit references for issue body using `gh pr list --limit 5`
-   - If repository is private: Skip reference collection (will use generalized examples only)
+   - If repository is private: Skip reference collection (will apply generalization in Step 5.6)
 4. Extract improvement opportunities:
    - Missing patterns or examples
    - Insufficient guidance or documentation
@@ -134,13 +135,14 @@ Output language: Japanese, formal business tone
    追加・削除・修正したい項目があれば教えてください。
    ```
 
-5.6. Apply generalization for private repositories (if applicable):
+5.6. Apply generalization for private repositories:
+
+   **Condition**: Execute this step ONLY if `IS_PRIVATE` is true (determined in Step 3)
 
    **Purpose**: Automatically generalize code examples and identifiers when working repository is private
 
    **Actions**:
-   1. Check if working repository is private (already done in Step 3)
-   2. If private, apply generalization patterns to issue body:
+   1. Apply generalization patterns to issue body:
 
       **Automatic pattern matching and replacement**:
 
@@ -189,9 +191,9 @@ Output language: Japanese, formal business tone
       - calculateMonthlyFee → calculateValue
       ```
 
-   4. Apply replacements to issue body using regex patterns
-   5. Maintain consistency: same term → same generic name throughout issue body
-   6. Track generalization count (functions, repositories, domain terms) for Step 5.7
+   2. Apply replacements to issue body using regex patterns
+   3. Maintain consistency: same term → same generic name throughout issue body
+   4. Track generalization count (functions, repositories, domain terms) for Step 5.7
 
    **Implementation guideline**:
    - Use regex patterns to detect domain-specific terms
@@ -203,7 +205,9 @@ Output language: Japanese, formal business tone
      - **Level 3 (MAY keep specific)**: FilterExpression structure, query patterns, AWS service names
      - **Level 4 (MUST keep specific)**: Language keywords, standard library, common patterns
 
-5.7. Confirm generalized content with user (for private repositories):
+5.7. Confirm generalized content with user:
+
+   **Condition**: Execute this step ONLY if Step 5.6 was executed (i.e., `IS_PRIVATE` is true)
 
    **Purpose**: Ensure generalization is appropriate before creating public issue
 
@@ -249,11 +253,22 @@ Output language: Japanese, formal business tone
    ```
 
 6. Create GitHub issue:
+
+   **Flow**:
+   - If `IS_PRIVATE` is false (public repository):
+     - Proceed directly to issue creation
+   - If `IS_PRIVATE` is true (private repository):
+     - Steps 5.6 and 5.7 have been executed
+     - Use generalized issue body from Step 5.6
+     - User has approved content in Step 5.7
+
+   **Actions**:
    - Determine target repository:
      - Check current repository: `gh repo view --json nameWithOwner -q .nameWithOwner`
      - If current repository is toumakido/my-claude: Create issue here
      - Otherwise: Confirm with user or default to https://github.com/toumakido/my-claude
    - Use `gh issue create --repo toumakido/my-claude` with generated content
+
 7. Display created issue URL
 
 ## Issue Template Format
