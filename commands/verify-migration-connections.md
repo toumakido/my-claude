@@ -71,7 +71,8 @@ This command **prepares code for AWS SDK v2 connection testing** by **temporaril
    - Identify intermediate layers (usecase/service/repository/gateway)
    - Build complete chains: entry → intermediate → SDK function
    - For each chain, count all AWS SDK v2 method calls within the chain
-   - Mark chains with multiple SDK methods as high priority
+   - Mark chains with multiple SDK methods as high priority (will verify all operations together)
+   - Record all SDK operations in the chain for grouped verification
    - Execute Grep searches in parallel for independent functions
 
    Step 2.5: Verify active callers (exclude unused implementations)
@@ -140,51 +141,71 @@ This command **prepares code for AWS SDK v2 connection testing** by **temporaril
 
    Return: Filtered function list with only actively called functions, all call chains sorted by priority, skipped functions list (including unused implementations)."
 
-3. **Group and deduplicate chains with Task tool** (subagent_type=general-purpose)
-   Task prompt: "Group and deduplicate call chains to create optimal combination:
+3. **Deduplicate chains with coverage-based selection (Task tool)** (subagent_type=general-purpose)
+   Task prompt: "Deduplicate call chains using coverage-based selection to minimize redundant verification:
 
-   Step 1: Group by SDK operation type (動作確認の観点)
-   - Key: AWS_service + SDK_operation
-   - Value: list of call chains using same SDK operation
-   - Example: all chains using 'DynamoDB PutItem' are grouped together
-   - Ignore: file path, line number, function name, region, endpoint, table/bucket names, filters, and all parameters
-   - Rationale: From operation verification perspective, only AWS service type and SDK operation matter
-   - **IMPORTANT**: Each group MUST select exactly ONE representative chain (not multiple)
+   **Strategy**: Prioritize chains with multiple SDK operations, track covered operations, skip chains that don't add new coverage.
 
-   Examples of grouping:
+   Step 1: Sort chains by SDK operation count (descending)
+   - Primary sort: Number of SDK operations (more operations = higher priority)
+   - Secondary sort: Chain length (fewer hops = easier to verify)
+   - Rationale: Chains with multiple SDK operations can verify several migrations in one execution
+
+   Example sorted order:
    ```
-   Same group (same S3 GetObject):
-   - s3.go:45 | DownloadFromBucketA | S3 GetObject (bucket: bucket-a)
-   - s3.go:89 | DownloadFromBucketB | S3 GetObject (bucket: bucket-b)
-   → Only verify one
-
-   Same group (same DynamoDB Query):
-   - user.go:30 | GetByStatus | DynamoDB Query (filter: status)
-   - user.go:60 | GetByAge | DynamoDB Query (filter: age)
-   → Only verify one
+   1. ChainB: DynamoDB PutItem + S3 PutObject + SES SendEmail (3 ops, 5 hops)
+   2. ChainD: DynamoDB Query + SNS Publish (2 ops, 3 hops)
+   3. ChainA: DynamoDB PutItem (1 op, 2 hops)
+   4. ChainC: S3 PutObject (1 op, 2 hops)
+   5. ChainE: SES SendEmail (1 op, 4 hops)
    ```
 
-   Step 2: Select representative chain from each group
-   For each group:
-   - **MUST select exactly ONE representative chain** (not multiple)
-   - Selection priority:
-     - Priority 1: Shortest chain (fewest hops)
-     - Priority 2: Entry point is 'main' function
-     - Priority 3: First in list (tie-breaker)
-   - Mark selected chain with: [+N other chains] where N = group size - 1
-   - **Verification**: Ensure no duplicate AWS_service + SDK_operation in final output
+   Step 2: Select chains with coverage tracking
+   Initialize: covered_operations = {} (empty set)
 
-   For groups with single chain:
-   - Select the only chain
-   - No marker needed
+   For each chain in sorted order:
+   1. Extract all SDK operations in chain
+      - Format: "AWS_service + SDK_operation"
+      - Example: ["DynamoDB PutItem", "S3 PutObject", "SES SendEmail"]
 
-   Step 3: Create optimal combination
-   - Combine all selected representative chains
-   - Maintain original priority sorting (from step 2)
-   - Result: minimal set covering all unique SDK operation types
+   2. Check for new coverage:
+      - new_operations = chain operations NOT in covered_operations
+      - If new_operations is empty: SKIP this chain (all operations already covered)
+      - If new_operations is not empty: SELECT this chain
 
-   Step 4: Verify entry points
-   For each selected representative chain:
+   3. Update covered operations:
+      - Add all chain operations to covered_operations
+      - Mark chain with: [+N similar chains] where N = number of skipped chains covering same operations
+
+   Example execution:
+   ```
+   ChainB (DynamoDB + S3 + SES):
+     new_operations = {DynamoDB PutItem, S3 PutObject, SES SendEmail}
+     → SELECT ✓
+     covered = {DynamoDB PutItem, S3 PutObject, SES SendEmail}
+
+   ChainD (DynamoDB Query + SNS):
+     new_operations = {DynamoDB Query, SNS Publish}
+     → SELECT ✓
+     covered = {DynamoDB PutItem, S3 PutObject, SES SendEmail, DynamoDB Query, SNS Publish}
+
+   ChainA (DynamoDB PutItem):
+     new_operations = {} (already in covered)
+     → SKIP (covered by ChainB)
+
+   ChainC (S3 PutObject):
+     new_operations = {} (already in covered)
+     → SKIP (covered by ChainB)
+
+   ChainE (SES SendEmail):
+     new_operations = {} (already in covered)
+     → SKIP (covered by ChainB)
+
+   Result: ChainB [+2 similar chains], ChainD
+   ```
+
+   Step 3: Verify entry points
+   For each selected chain:
    1. Confirm entry point is traceable using Grep/Glob:
       - API handler: Verify route registration
       - Task command: Verify binary in cmd/
@@ -192,8 +213,16 @@ This command **prepares code for AWS SDK v2 connection testing** by **temporaril
    2. If entry point unconfirmed:
       - Mark as "SKIP - No entry point"
       - Remove from optimal combination
+      - Add skipped operations back to uncovered set
+      - Continue selection from remaining chains
 
-   Return: optimal combination (deduplicated chains with verified entry points), skipped functions list"
+   Step 4: Handle same-operation chains with different parameters
+   When multiple chains use same SDK operation but with different parameters:
+   - Example: DynamoDB Query with different FilterExpressions
+   - Group by exact SDK operation signature if parameters affect behavior
+   - Otherwise treat as same operation (parameters like table names, filters don't affect SDK v2 migration verification)
+
+   Return: optimal combination (deduplicated chains with verified entry points), skipped chains list with skip reasons"
 
 4. **Format and cache optimal combination**
    Store Task result in variable for batch processing.
@@ -268,10 +297,10 @@ This command **prepares code for AWS SDK v2 connection testing** by **temporaril
 **CRITICAL - MUST NOT SKIP**: This phase MUST be executed for ALL chains without exception.
 
 **Why this is required**:
-- Isolates target AWS SDK operation by removing unrelated code
-- Prevents interference from other AWS SDK calls, external APIs, logging, metrics
-- Enables focused testing of specific SDK operation
-- Without this step, verification will test multiple operations simultaneously, making it impossible to identify which SDK v2 migration is actually working
+- Isolates target AWS SDK operations (may be multiple in same data flow) by removing unrelated code
+- Prevents interference from independent AWS SDK calls, external APIs, logging, metrics
+- Enables focused testing of connected SDK operations in the chain
+- Without this step, verification may test unrelated operations, making it harder to identify which SDK v2 migrations are working
 
 6. **Comment out unrelated code in call chain functions (strict mode)**
 
@@ -284,35 +313,47 @@ This command **prepares code for AWS SDK v2 connection testing** by **temporaril
    ```
 
    B. **Identify unrelated code with Task tool** (subagent_type=general-purpose)
-   Task prompt: "For call chain [entry_point → ... → target_function] with target AWS SDK operation [operation_name]:
+   Task prompt: "For call chain [entry_point → ... → target_function] with target AWS SDK operations [operation_names]:
 
    **CRITICAL**: You MUST identify and return code blocks to comment out. Do NOT skip this analysis.
    - Even if the code appears production-ready, you must analyze and identify unrelated blocks
    - If you cannot find any unrelated code, explicitly state 'No unrelated code found' with reasoning
    - Do NOT make assumptions about whether this step should be skipped
 
-   **Strict mode**: Only keep code DIRECTLY related to target AWS SDK operation data flow
+   **Strategy**: Keep all connected AWS SDK operations in the same data flow, comment out independent operations
 
    For EACH function in call chain (entry → intermediate → target):
 
    1. Use Read to load function source code
 
-   2. Identify target data flow path:
-      - Target function: Identify variables/parameters used in AWS SDK call
+   2. Identify ALL target AWS SDK operations in chain:
+      - Scan entire call chain for AWS SDK v2 method calls
+      - Group SDK operations by data flow dependency:
+        - **Connected operations**: SDK calls using data from previous SDK results or contributing to final result
+        - **Independent operations**: SDK calls with completely separate data flows (side effects, notifications, logging)
+      - Example connected: S3 GetObject → parse result → DynamoDB PutItem with parsed data
+      - Example independent: Main DynamoDB+S3 flow + separate SES SendEmail notification
+
+   3. Identify target data flows for connected operations:
+      - For each connected SDK operation group, trace complete data flow
+      - Target functions: Identify variables/parameters used in ALL connected SDK calls
       - Intermediate functions: Trace these variables backwards through function calls
       - Entry point: Trace to function parameters or immediate values
 
-   3. Classify ALL code blocks as KEEP or COMMENT:
+   4. Classify ALL code blocks as KEEP or COMMENT:
 
-      **KEEP (directly related to target AWS SDK operation)**:
-      - Variable declarations used in target data flow
-      - Assignments to target data flow variables
-      - Function calls that return values used in target data flow
-      - Control flow (if/for/switch) that affects target data flow
+      **KEEP (directly related to connected target AWS SDK operations)**:
+      - Variable declarations used in ANY target data flow
+      - Assignments to ANY target data flow variables
+      - Function calls that return values used in ANY target data flow
+      - Control flow (if/for/switch) that affects ANY target data flow
       - Error returns after target data flow operations
+      - **ALL AWS SDK operations in the same connected data flow chain**
 
-      **COMMENT (unrelated to target AWS SDK operation)**:
-      - Other AWS SDK service calls (different service or independent operation)
+      **COMMENT (unrelated to target AWS SDK operation chain)**:
+      - AWS SDK service calls with INDEPENDENT data flows
+        - Example: Main flow uses DynamoDB+S3, separate notification flow uses SES
+        - Only comment if the SDK call doesn't contribute to main operation result or doesn't use main operation data
       - **External API calls**:
         - **Repository/Gateway/Client layer method calls**: `*Repository`, `*Gateway`, `*Client` type instance methods
           - Examples: `userRepo.GetUser()`, `dataRepo.FetchData()`, `seqRepo.GetNext()`
@@ -333,20 +374,31 @@ This command **prepares code for AWS SDK v2 connection testing** by **temporaril
       - Business logic on independent variables
       - Side effects (notifications, cache updates, etc.)
 
-   4. For each COMMENT block, document reason:
+   5. For each COMMENT block, document reason:
       ```go
       // Commented out for testing: [reason]
       // [original code]
       ```
 
+      Example reasons:
+      - "SES notification independent from main DynamoDB+S3 operation chain"
+      - "Metrics collection not part of target SDK operation chain"
+      - "SNS publish independent from main DynamoDB operation"
+
    Return format for entire call chain:
    ```
    Call chain: [entry] → [intermediate] → [target]
+   Connected SDK operations: [list of all operations in data flow]
+   Independent SDK operations to comment out: [list]
 
    Function 1: [entry_function] at [file:line]
    Code blocks to comment out:
-   - Lines X-Y: [reason] (e.g., \"DynamoDB call unrelated to target S3 operation\")
-   - Lines A-B: [reason] (e.g., \"HTTP API call for external notification\")
+   - Lines X-Y: [reason] (e.g., "SES notification independent from main DynamoDB+S3 flow")
+   - Lines A-B: [reason] (e.g., "HTTP API call for external notification")
+
+   Code blocks to keep (connected SDK operations):
+   - Lines P-Q: DynamoDB PutItem (part of main flow)
+   - Lines R-S: S3 PutObject using DynamoDB result (connected)
 
    Function 2: [intermediate_function] at [file:line]
    Code blocks to comment out:
@@ -645,8 +697,15 @@ This command **prepares code for AWS SDK v2 connection testing** by **temporaril
 
     **X-Ray確認ポイント**:
     - [Service] [Operation1] × N回
-    - [Service] [Operation2] × M回
+    - [Service] [Operation2] × M回 (connected to Operation1)
+    - [Service] [Operation3] × M回 (connected flow)
+    - Data flow: Operation1 result → Operation2 input → Operation3
     - FilterExpressionが正しく動作（該当する場合）
+
+    **連続実行の確認**:
+    - 複数SDK操作が順次実行され、すべて成功することを確認
+    - データが正しく連携していることをログで確認
+    - 独立したSDK操作（コメントアウト済み）は実行されないことを確認
     ```
 
     ### Verification Method Grouping Policy
