@@ -292,6 +292,24 @@ This command **prepares code for AWS SDK v2 connection testing** by **temporaril
    - If "はい" selected: proceed to Phase 3 (batch processing)
    - If "いいえ" selected: exit with "処理をキャンセルしました"
 
+   **Complexity handling policy** (if processing time exceeds reasonable limits):
+
+   1. Mandatory minimum: Process at least N chains (N = min(total chains, 3))
+   2. Priority order when time-constrained:
+      - Chains with multiple SDK operations (highest priority)
+      - Chains with Read/Delete operations (need Pre-insert)
+      - Chains with single Write operations (lowest priority)
+
+   3. Skip criteria (only apply after meeting mandatory minimum):
+      - Chain has 6+ external dependencies
+      - Chain has 6+ hops (deep call stack)
+      - Processing single chain exceeds 15 minutes
+
+   4. When skipping a chain:
+      - Output: "スキップ: [reason] (Chain N: [description])"
+      - Document skipped chains in final summary
+      - Continue with remaining chains
+
 ### Phase 3: Comment-out Unrelated Code
 
 **CRITICAL - MUST NOT SKIP**: This phase MUST be executed for ALL chains without exception.
@@ -315,14 +333,68 @@ This command **prepares code for AWS SDK v2 connection testing** by **temporaril
    B. **Identify unrelated code with Task tool** (subagent_type=general-purpose)
    Task prompt: "For call chain [entry_point → ... → target_function] with target AWS SDK operations [operation_names]:
 
+   **CRITICAL**: Analyze COMPLETE call chain including all function implementations.
+
+   **Analysis scope** (MUST process all):
+   1. Entry point function implementation (handler/task)
+   2. ALL intermediate function implementations (service layer)
+   3. ALL target function implementations (repository/gateway layer)
+
+   **For EACH function implementation**:
+
+   Step 1: Load function source code using Read
+   - File: [function file path]
+   - Read entire function body (not just signature)
+
+   Step 2: Identify ALL external dependencies within function body
+   - Repository/Gateway/Client method calls
+   - HTTP/gRPC client usage
+   - Third-party API integrations
+   - Database operations not part of AWS SDK
+   - External service calls
+
+   Step 3: Identify ALL AWS SDK operations within function body
+   - DynamoDB: Query, GetItem, PutItem, UpdateItem, etc.
+   - S3: GetObject, PutObject, DeleteObject, etc.
+   - Other AWS services
+
+   Step 4: Classify external dependencies
+   - Connected to AWS SDK data flow: KEEP
+   - Independent side effects: COMMENT
+
+   **Recursive analysis requirement**:
+   - When intermediate function calls another function, analyze that function too
+   - Continue until reaching AWS SDK operations or external APIs
+   - Maximum recursion depth: 5 levels
+
+   **Example analysis output**:
+   ```
+   Function 1: EntityHandler.DeleteEntity (entry point)
+     External dependencies:
+       - GetEntityByID() call at line 123 → Analyze GetEntityByID implementation
+       - CreateTransfer() call at line 234 → Analyze CreateTransfer implementation
+
+   Function 2: GetEntityByID implementation
+     File: entity_service.go:456
+     External dependencies:
+       - externalServiceRepo.GetDetails() at line 460 → COMMENT (external API)
+     AWS SDK operations:
+       - dynamoDB.Query() at line 465 → KEEP (target operation)
+
+   Function 3: CreateTransfer implementation
+     File: transfer_service.go:567
+     External dependencies:
+       - dataSourceRepo.GetBusinessDays() at line 570 → COMMENT (external API)
+     AWS SDK operations:
+       - dynamoDB.TransactWriteItems() at line 580 → KEEP (target operation)
+   ```
+
    **CRITICAL**: You MUST identify and return code blocks to comment out. Do NOT skip this analysis.
    - Even if the code appears production-ready, you must analyze and identify unrelated blocks
    - If you cannot find any unrelated code, explicitly state 'No unrelated code found' with reasoning
    - Do NOT make assumptions about whether this step should be skipped
 
    **Strategy**: Keep all connected AWS SDK operations in the same data flow, comment out independent operations
-
-   For EACH function in call chain (entry → intermediate → target):
 
    1. Use Read to load function source code
 
@@ -409,13 +481,39 @@ This command **prepares code for AWS SDK v2 connection testing** by **temporaril
    - Lines P-Q: [reason]
    ```"
 
-   C. **Apply comment-out modifications with Edit tool**
+   C. **Verify no external dependencies remain (MANDATORY)**
+
+   Run the following verification for the processed chain:
+
+   1. Search for active external API calls using Grep:
+      - Pattern: `(Repository|Gateway|Client)\.(Get|Fetch|Post|Update|Delete|Create)`
+      - Exclude: `*_test.go`, `mocks/*.go`
+      - Exclude: AWS SDK methods (PutItem, GetItem, Query, etc.)
+
+   2. If any matches found:
+      - List unprocessed functions with line numbers
+      - ERROR: "Phase 3 incomplete - external dependencies remain"
+      - HALT processing for this chain
+
+   3. If no matches found:
+      - Output: "検証完了: 外部依存0件"
+      - Proceed to next chain
+
+   Example output:
+   ```
+   検証実行中: 外部API呼び出しの残存チェック
+   - externalServiceRepo.GetDetails() at service.go:123 - NOT COMMENTED
+   - dataSourceRepo.GetBusinessDays() at handler.go:234 - NOT COMMENTED
+   ERROR: Phase 3 incomplete - 2 external dependencies remain
+   ```
+
+   D. **Apply comment-out modifications with Edit tool**
 
    Check step B result and apply modifications:
 
    1. If step B identified zero code blocks to comment out:
       - Output: "スキップ: コメントアウトするコードなし"
-      - Proceed to step D (compilation verification)
+      - Proceed to step E (compilation verification)
 
    2. If step B identified one or more code blocks to comment out:
       - Apply ALL comment-out modifications as specified below
@@ -448,7 +546,7 @@ This command **prepares code for AWS SDK v2 connection testing** by **temporaril
       コメントアウト完了: [function_name] [file:line] (N blocks commented)
       ```
 
-   D. **Replace commented-out code with dummy values**
+   E. **Replace commented-out code with dummy values**
 
    For each commented-out external API call that returns values used in target data flow:
 
@@ -497,7 +595,7 @@ This command **prepares code for AWS SDK v2 connection testing** by **temporaril
    - Document dummy values with inline comments (`// Dummy X for testing`)
    - If commented code doesn't return values or values aren't used: skip dummy value assignment
 
-   E. **Verify compilation after modifications**
+   F. **Verify compilation after modifications**
       - Run: `go build -o /tmp/test-build 2>&1`
       - If compilation fails:
         - Analyze error: unused variables, undefined references
@@ -505,7 +603,7 @@ This command **prepares code for AWS SDK v2 connection testing** by **temporaril
         - Retry until compilation succeeds
       - Output: "コンパイル成功: [file_path]"
 
-   F. Display completion:
+   G. Display completion:
    ```
    完了 (i/N): コメントアウト処理
    - 処理した関数数: X個
@@ -513,7 +611,7 @@ This command **prepares code for AWS SDK v2 connection testing** by **temporaril
    - コンパイル: 成功
    ```
 
-   G. Proceed to next chain automatically
+   H. Proceed to next chain automatically
 
 ### Phase 4: Simplified Test Data Preparation
 
@@ -558,6 +656,34 @@ This command **prepares code for AWS SDK v2 connection testing** by **temporaril
 
    **Simplified approach**: Skip detailed analysis, generate minimal test data
 
+   **Read/Delete operation detection for entire chain**:
+
+   For each chain, identify ALL operations (not just the primary operation):
+
+   Step 1: List all AWS SDK operations in the chain
+   - Example: [Query, UpdateItem, TransactWriteItems]
+
+   Step 2: Classify each operation
+   - Read operations: Query, GetItem, GetObject, Scan, BatchGetItem
+   - Delete operations: DeleteItem, DeleteObject, BatchDeleteItem
+   - Write operations: PutItem, UpdateItem, TransactWriteItems, etc.
+
+   Step 3: Determine Pre-insert requirement
+   - If chain contains ANY Read operation → Generate Pre-insert for EACH Read operation
+   - If chain contains ANY Delete operation → Generate Pre-insert for EACH Delete target
+   - If chain contains only Write operations → No Pre-insert needed
+
+   **Example**:
+   ```
+   Chain: DELETE /api/v1/entities/:id
+   Operations: Query + UpdateItem + TransactWriteItems
+   Analysis:
+     - Query is Read → Needs Pre-insert code
+     - UpdateItem is Write → No Pre-insert
+     - TransactWriteItems is Write → No Pre-insert
+   Result: Generate Pre-insert for Query operation
+   ```
+
    If AWS operation is Read or Delete:
    1. Use Read to identify AWS SDK call parameters (table name, key, bucket, etc.)
    2. Generate 1-2 minimal test records matching those parameters
@@ -593,14 +719,45 @@ This command **prepares code for AWS SDK v2 connection testing** by **temporaril
         - Repeat until compilation succeeds
       - Output: "コンパイル成功: [file_path]"
 
-   C. Display completion:
+   C. **Verify Pre-insert code for all Read/Delete operations (MANDATORY)**
+
+   Run the following verification for the processed chain:
+
+   1. Search for Read/Delete operations using Grep:
+      - Pattern: `client\.(Query|GetItem|GetObject|Scan|DeleteItem|DeleteObject)`
+      - In files: processed chain files only
+
+   2. For each Read/Delete operation found:
+      - Check lines before operation (within 20 lines)
+      - Search for Pre-insert code patterns:
+        - Comment: `// Pre-insert test data`
+        - Code: `PutItem.*Input` or `PutObject.*Input`
+
+   3. If Pre-insert missing for any operation:
+      - List operations without Pre-insert
+      - ERROR: "Phase 4 incomplete - Pre-insert code missing"
+      - HALT processing for this chain
+
+   4. If all operations have Pre-insert:
+      - Output: "検証完了: Pre-insertコード生成済み (N operations)"
+      - Proceed to next chain
+
+   Example output:
+   ```
+   検証実行中: Pre-insertコードの生成チェック
+   - Query at repository.go:123 - Pre-insert: NOT FOUND
+   - GetItem at gateway.go:234 - Pre-insert: FOUND
+   ERROR: Phase 4 incomplete - 1 operation missing Pre-insert code
+   ```
+
+   D. Display completion:
       ```
       完了 (i/N): テストデータ準備
       - Pre-insertコード: 追加済み / 不要
       - コンパイル: 成功
       ```
 
-   D. Proceed to next chain automatically
+   E. Proceed to next chain automatically
 
 11. **Proceed to next chain automatically**
    - If i < N: continue to next chain (repeat from step 6.A)
