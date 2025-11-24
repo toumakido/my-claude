@@ -305,19 +305,18 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 
 **CRITICAL - MUST NOT SKIP**: This phase MUST be executed for ALL chains without exception.
 
-**Definition of "unrelated code"**:
-Code blocks are "unrelated" if they are NOT part of the target AWS SDK operation's data flow:
-- Keep: Code that prepares data for target SDK calls, or uses results from target SDK calls
-- Keep: All AWS SDK operations in the same connected data flow chain
-- Comment: AWS SDK calls with independent data flows (separate notifications, side effects)
-- Comment: External API calls (Repository/Gateway/Client methods, HTTP/gRPC clients)
-- Comment: Logging, metrics, validation not affecting target data flow
+**Simplified approach**:
+Keep only code directly related to AWS SDK operation's data flow using backward variable tracing:
+1. Identify target SDK operation and input variables (e.g., `dynamoDB.PutItem(ctx, &input)` → trace `input`)
+2. Trace variables backward to find all code that constructs them
+3. Keep: Variable declarations, assignments, function calls that contribute to SDK input
+4. Comment: Everything else (external APIs, logging, metrics, independent operations)
 
 **Why this is required**:
-- Isolates target AWS SDK operations by removing independent operations and external dependencies
-- Prevents interference from unrelated AWS SDK calls, external APIs, logging, metrics
-- Enables focused testing of connected SDK operations in the chain
-- Without this step, verification tests too many operations, making it harder to identify which SDK v2 migrations work
+- Isolates target AWS SDK operations by keeping only data flow code
+- Simple variable tracing eliminates complex dependency classification
+- Enables focused testing without interference from unrelated code
+- Without this step, verification tests too many operations simultaneously
 
 6. **Comment out unrelated code in call chain functions (strict mode)**
 
@@ -329,201 +328,107 @@ Code blocks are "unrelated" if they are NOT part of the target AWS SDK operation
    関数: [file_path:line_number] | [function_name] | [operations]
    ```
 
-   B. **Identify unrelated code with Task tool** (subagent_type=general-purpose)
-   Task prompt: "For call chain [entry_point → ... → target_function] with target AWS SDK operations [operation_names]:
+   B. **Identify code to keep using backward variable tracing** (Task tool: subagent_type=general-purpose)
+   Task prompt: "For call chain [entry_point → ... → target_function] with AWS SDK operations [operation_names]:
 
-   **CRITICAL**: Analyze COMPLETE call chain including all function implementations.
+   **Simplified strategy**: Use backward variable tracing to identify code that contributes to SDK operations.
 
-   **Analysis scope** (MUST process all):
-   1. Entry point function implementation (handler/task)
-   2. ALL intermediate function implementations (service layer)
-   3. ALL target function implementations (repository/gateway layer)
-
-   **For EACH function implementation**:
+   **For EACH function in call chain** (entry → intermediate → target):
 
    Step 1: Load function source code using Read
    - File: [function file path]
-   - Read entire function body (not just signature)
+   - Read entire function body
 
-   Step 2: Identify ALL external dependencies within function body
-   - Repository/Gateway/Client method calls
-   - HTTP/gRPC client usage
-   - Third-party API integrations
-   - Database operations not part of AWS SDK
-   - External service calls
+   Step 2: Identify AWS SDK operation calls and input variables
+   - Find SDK method calls: `client.PutItem(ctx, &input)`, `client.GetObject(ctx, params)`
+   - Extract input variable names: `input`, `params`, etc.
+   - Example: `dynamoDB.PutItem(ctx, &dynamodb.PutItemInput{...})` → trace the struct initialization
 
-   Step 3: Identify ALL AWS SDK operations within function body
-   - DynamoDB: Query, GetItem, PutItem, UpdateItem, etc.
-   - S3: GetObject, PutObject, DeleteObject, etc.
-   - Other AWS services
+   Step 3: Trace variables backward
+   - Start from SDK input variables
+   - Find all statements that define, assign, or modify these variables
+   - Recursively trace dependent variables
+   - Stop when reaching function parameters or constants
 
-   Step 4: Classify external dependencies
-   - Connected to AWS SDK data flow: KEEP
-   - Independent side effects: COMMENT
+   Step 4: Mark code blocks
+   - **KEEP**: All code in the backward trace (variable declarations, assignments, function calls in trace)
+   - **COMMENT**: Everything else (external calls, logging, metrics, untraced variables)
 
-   **Recursive analysis requirement**:
-   - When intermediate function calls another function, analyze that function too
-   - Continue until reaching AWS SDK operations or external APIs
-   - Maximum recursion depth: 5 levels
+   **Example**:
+   ```go
+   // SDK operation
+   result, err := dynamoDB.PutItem(ctx, &dynamodb.PutItemInput{
+       TableName: aws.String("entities"),
+       Item: item,  // ← Trace this
+   })
 
-   **Example analysis output**:
+   // Backward trace
+   item := buildItem(entity)        // KEEP (defines 'item')
+   entity := req.ToEntity()         // KEEP (defines 'entity')
+   req := parseRequest(r)           // KEEP (defines 'req')
+
+   // Not in trace
+   userData := userRepo.Get(ctx)    // COMMENT (not used in SDK operation)
+   logger.Info("processing")        // COMMENT (not used in SDK operation)
+   metrics.Increment("calls")       // COMMENT (not used in SDK operation)
    ```
-   Function 1: EntityHandler.DeleteEntity (entry point)
-     External dependencies:
-       - GetEntityByID() call at line 123 → Analyze GetEntityByID implementation
-       - CreateTransfer() call at line 234 → Analyze CreateTransfer implementation
-
-   Function 2: GetEntityByID implementation
-     File: entity_service.go:456
-     External dependencies:
-       - externalServiceRepo.GetDetails() at line 460 → COMMENT (external API)
-     AWS SDK operations:
-       - dynamoDB.Query() at line 465 → KEEP (target operation)
-
-   Function 3: CreateTransfer implementation
-     File: transfer_service.go:567
-     External dependencies:
-       - dataSourceRepo.GetBusinessDays() at line 570 → COMMENT (external API)
-     AWS SDK operations:
-       - dynamoDB.TransactWriteItems() at line 580 → KEEP (target operation)
-   ```
-
-   **CRITICAL**: You MUST identify and return code blocks to comment out. Do NOT skip this analysis.
-   - Even if the code appears production-ready, you must analyze and identify unrelated blocks
-   - If you cannot find any unrelated code, explicitly state 'No unrelated code found' with reasoning
-   - Do NOT make assumptions about whether this step should be skipped
-
-   **Strategy**: Keep all connected AWS SDK operations in the same data flow, comment out independent operations
-
-   1. Use Read to load function source code
-
-   2. Identify ALL target AWS SDK operations in chain:
-      - Scan entire call chain for AWS SDK v2 method calls
-      - Group SDK operations by data flow dependency:
-        - **Connected operations**: SDK calls using data from previous SDK results or contributing to final result
-        - **Independent operations**: SDK calls with completely separate data flows (side effects, notifications, logging)
-      - Example connected: S3 GetObject → parse result → DynamoDB PutItem with parsed data
-      - Example independent: Main DynamoDB+S3 flow + separate SES SendEmail notification
-
-   3. Identify target data flows for connected operations:
-      - For each connected SDK operation group, trace complete data flow
-      - Target functions: Identify variables/parameters used in ALL connected SDK calls
-      - Intermediate functions: Trace these variables backwards through function calls
-      - Entry point: Trace to function parameters or immediate values
-
-   4. Classify ALL code blocks as KEEP or COMMENT:
-
-      **KEEP (directly related to connected target AWS SDK operations)**:
-      - Variable declarations used in ANY target data flow
-      - Assignments to ANY target data flow variables
-      - Function calls that return values used in ANY target data flow
-      - Control flow (if/for/switch) that affects ANY target data flow
-      - Error returns after target data flow operations
-      - **ALL AWS SDK operations in the same connected data flow chain**
-
-      **COMMENT (unrelated to target AWS SDK operation chain)**:
-      - AWS SDK calls with independent data flows (e.g., main flow uses DynamoDB+S3, separate SES notification)
-      - **External API calls**:
-        - Repository/Gateway/Client methods: `*Repository`, `*Gateway`, `*Client` instance methods
-          - Examples: `userRepo.GetUser()`, `dataRepo.FetchData()`, `seqRepo.GetNext()`
-          - Patterns: `(repo|gateway|client)\.(Get|Fetch|Register|Update|Delete)`
-        - HTTP/gRPC clients: `http.Client`, `grpc.ClientConn` usage
-        - External integrations: business date APIs, third-party services, auth services
-      - Database operations not in target data flow
-      - Logging, metrics collection
-      - Validation not affecting target data flow
-      - Business logic on independent variables
-      - Side effects (notifications, cache updates)
-
-   5. For each COMMENT block, document reason:
-      ```go
-      // Commented out for testing: [reason]
-      // [original code]
-      ```
-
-      Example reasons:
-      - "SES notification independent from main DynamoDB+S3 operation chain"
-      - "Metrics collection not part of target SDK operation chain"
-      - "SNS publish independent from main DynamoDB operation"
 
    Return format for entire call chain:
    ```
    Call chain: [entry] → [intermediate] → [target]
-   Connected SDK operations: [list of all operations in data flow]
-   Independent SDK operations to comment out: [list]
+   SDK operations: [list]
 
    Function 1: [entry_function] at [file:line]
-   Code blocks to comment out:
-   - Lines X-Y: [reason] (e.g., "SES notification independent from main DynamoDB+S3 flow")
-   - Lines A-B: [reason] (e.g., "HTTP API call for external notification")
+   Code blocks to KEEP (traced variables):
+   - Lines X-Y: [variable names in trace]
 
-   Code blocks to keep (connected SDK operations):
-   - Lines P-Q: DynamoDB PutItem (part of main flow)
-   - Lines R-S: S3 PutObject using DynamoDB result (connected)
+   Code blocks to COMMENT:
+   - Lines A-B: Not in SDK input trace
+   - Lines C-D: Not in SDK input trace
 
    Function 2: [intermediate_function] at [file:line]
-   Code blocks to comment out:
-   - Lines M-N: [reason]
+   Code blocks to KEEP:
+   - Lines M-N: [variable names in trace]
 
-   Function 3: [target_function] at [file:line]
-   Code blocks to comment out:
-   - Lines P-Q: [reason]
+   Code blocks to COMMENT:
+   - Lines P-Q: Not in SDK input trace
    ```"
 
-   C. **Verify no external dependencies remain (MANDATORY)**
+   C. **Verify Step B identified code blocks (optional sanity check)**
 
-   Run the following verification for the processed chain:
+   Quick verification that Step B produced actionable results:
 
-   1. Search for active external API calls using Grep:
-      - Pattern: `(Repository|Gateway|Client)\.(Get|Fetch|Post|Update|Delete|Create)`
-      - Exclude: `*_test.go`, `mocks/*.go`
-      - Exclude: AWS SDK methods (PutItem, GetItem, Query, etc.)
+   1. Check Step B output:
+      - If "Code blocks to COMMENT" sections are empty for ALL functions: Output "検証: コメントアウトするコードなし"
+      - If at least one "Code blocks to COMMENT" section has entries: Output "検証完了: コメントアウト対象 N個"
 
-   2. If any matches found:
-      - List unprocessed functions with line numbers
-      - ERROR: "Phase 3 incomplete - external dependencies remain"
-      - HALT processing for this chain
-
-   3. If no matches found:
-      - Output: "検証完了: 外部依存0件"
-      - Proceed to next chain
-
-   Example output:
-   ```
-   検証実行中: 外部API呼び出しの残存チェック
-   - externalServiceRepo.GetDetails() at service.go:123 - NOT COMMENTED
-   - dataSourceRepo.GetBusinessDays() at handler.go:234 - NOT COMMENTED
-   ERROR: Phase 3 incomplete - 2 external dependencies remain
-   ```
+   2. Proceed to Step D (no halting condition)
 
    D. **Apply comment-out modifications with Edit tool**
 
-   Check step B result and apply modifications:
+   Check Step B result and apply modifications:
 
-   1. If step B identified zero code blocks to comment out:
+   1. If Step B identified zero code blocks to comment out:
       - Output: "スキップ: コメントアウトするコードなし"
-      - Proceed to step E (compilation verification)
+      - Proceed to Step F (compilation verification)
 
-   2. If step B identified one or more code blocks to comment out:
-      - Apply ALL comment-out modifications as specified below
-      - For each function in call chain (process in order: entry → target):
-        - For each code block identified as COMMENT:
+   2. If Step B identified one or more code blocks to comment out:
+      - For each function in call chain (entry → target):
+        - For each code block marked as COMMENT:
           - Use Edit tool to comment out the block
-          - old_string: original code block
-          - new_string: commented code with reason
-          - Use simple `//` line comments
-          - Add reason comment: `// Commented out for testing: [reason]`
+          - Add simple comment: `// Commented out for testing: Not in SDK input trace`
+          - Use `//` line comments for all lines
 
    Example:
    ```go
-   // Original code:
+   // Original:
    userData, err := h.userRepo.GetUser(ctx, userID)
    if err != nil {
        return err
    }
 
-   // Modified code:
-   // Commented out for testing: User data not used in target DynamoDB SaveEntity operation
+   // Modified:
+   // Commented out for testing: Not in SDK input trace
    // userData, err := h.userRepo.GetUser(ctx, userID)
    // if err != nil {
    //     return err
@@ -532,57 +437,28 @@ Code blocks are "unrelated" if they are NOT part of the target AWS SDK operation
 
    3. Output after each edit:
       ```
-      コメントアウト完了: [function_name] [file:line] (N blocks commented)
+      コメントアウト完了: [function_name] [file:line] (N blocks)
       ```
 
-   E. **Replace commented-out code with dummy values**
+   E. **Replace commented-out code with dummy values if needed**
 
-   For each commented-out external API call that returns values used in target data flow:
+   Only if commented code returns values that cause compilation errors:
 
-   **Dummy value patterns**:
-   - **Date values**: Use fixed date or `time.Now()`
-     ```go
-     // Commented out for testing: Business date API not related to target operation
-     // businessDate := dateRepo.GetBusinessDate(ctx)
-     businessDate := "20250101" // Dummy date for testing
-     ```
+   Apply type-appropriate dummy values:
+   - Strings: `"test-value"`
+   - Integers: `1`
+   - Dates: `"20250101"` or `time.Now()`
+   - UUIDs: `uuid.MustParse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")`
+   - Structs: Minimal initialization with required fields
 
-   - **Identifiers/codes**: Use sequential or test prefixes
-     ```go
-     // Commented out for testing: Entity code API not related to target operation
-     // code := entityRepo.GetCode(ctx)
-     code := "001" // Dummy code for testing
-     ```
+   Example:
+   ```go
+   // Commented out for testing: Not in SDK input trace
+   // businessDate := dateRepo.GetBusinessDate(ctx)
+   businessDate := "20250101" // Dummy for testing
+   ```
 
-   - **Counter values**: Use fixed integer
-     ```go
-     // Commented out for testing: Sequence API not related to target operation
-     // counter := seqRepo.GetNext(ctx)
-     counter := 1 // Dummy counter for testing
-     ```
-
-   - **UUIDs**: Use predefined UUID
-     ```go
-     // Commented out for testing: ID generation API not related to target operation
-     // id := externalAPI.GenerateID(ctx)
-     id := uuid.MustParse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee") // Dummy UUID for testing
-     ```
-
-   - **Complex objects**: Use minimal struct initialization
-     ```go
-     // Commented out for testing: Details API not related to target operation
-     // details := entityRepo.GetDetails(ctx, id)
-     details := EntityDetails{ // Dummy details for testing
-         ID:   "test-id",
-         Name: "test-name",
-     }
-     ```
-
-   **Guidelines**:
-   - Ensure dummy values satisfy type requirements for compilation
-   - Use simple, recognizable patterns (e.g., "test-", "dummy-", "001")
-   - Document dummy values with inline comments (`// Dummy X for testing`)
-   - If commented code doesn't return values or values aren't used: skip dummy value assignment
+   Skip if commented code has no return values or values are unused
 
    F. **Verify compilation after modifications**
       - Run: `go build -o /tmp/test-build 2>&1`
