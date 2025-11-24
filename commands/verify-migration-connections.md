@@ -305,17 +305,15 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 
 **CRITICAL - MUST NOT SKIP**: This phase MUST be executed for ALL chains without exception.
 
-**Simplified approach**:
-Keep only code directly related to AWS SDK operation's data flow using backward variable tracing:
-1. Identify target SDK operation and input variables (e.g., `dynamoDB.PutItem(ctx, &input)` → trace `input`)
-2. Trace variables backward to find all code that constructs them
-3. Keep: Variable declarations, assignments, function calls that contribute to SDK input
-4. Comment: Everything else (external APIs, logging, metrics, independent operations)
+**Approach**:
+Keep only SDK-related code, comment out everything else:
+1. Identify SDK operation and its input variables (e.g., `dynamoDB.PutItem(ctx, &input)`)
+2. Identify SDK-related code: code that builds SDK input
+3. Comment out unrelated code: code NOT used by SDK operation
 
 **Why this is required**:
-- Isolates target AWS SDK operations by keeping only data flow code
-- Simple variable tracing eliminates complex dependency classification
-- Enables focused testing without interference from unrelated code
+- Isolates target AWS SDK operations by removing unrelated code
+- Enables focused testing of SDK v2 migration
 - Without this step, verification tests too many operations simultaneously
 
 6. **Comment out unrelated code in call chain functions (strict mode)**
@@ -328,70 +326,68 @@ Keep only code directly related to AWS SDK operation's data flow using backward 
    関数: [file_path:line_number] | [function_name] | [operations]
    ```
 
-   B. **Identify code to keep using backward variable tracing** (Task tool: subagent_type=general-purpose)
+   B. **Identify SDK-related code and unrelated code** (Task tool: subagent_type=general-purpose)
    Task prompt: "For call chain [entry_point → ... → target_function] with AWS SDK operations [operation_names]:
 
-   **Simplified strategy**: Use backward variable tracing to identify code that contributes to SDK operations.
+   **Context from Phase 1**:
+   - Call chain: [chain from Phase 1]
+   - SDK operation: [operation_name from Phase 1] (e.g., DynamoDB PutItem)
+   - Functions: [file:line for each function in chain]
+
+   **Strategy**: Classify code into SDK-related (keep) and unrelated (comment out).
 
    **For EACH function in call chain** (entry → intermediate → target):
 
    Step 1: Load function source code using Read
-   - File: [function file path]
+   - File: [function file path from Phase 1]
    - Read entire function body
 
-   Step 2: Identify AWS SDK operation calls and input variables
-   - Find SDK method calls: `client.PutItem(ctx, &input)`, `client.GetObject(ctx, params)`
-   - Extract input variable names: `input`, `params`, etc.
-   - Example: `dynamoDB.PutItem(ctx, &dynamodb.PutItemInput{...})` → trace the struct initialization
+   Step 2: Identify SDK-related code (KEEP)
+   - All code that defines, constructs, or provides data to SDK operation
+   - Variable declarations, assignments, function calls used by SDK input
+   - Example: `input := &dynamodb.PutItemInput{...}`, `item := buildItem(entity)`
 
-   Step 3: Trace variables backward
-   - Start from SDK input variables
-   - Find all statements that define, assign, or modify these variables
-   - Recursively trace dependent variables
-   - Stop when reaching function parameters or constants
-
-   Step 4: Mark code blocks
-   - **KEEP**: All code in the backward trace (variable declarations, assignments, function calls in trace)
-   - **COMMENT**: Everything else (external calls, logging, metrics, untraced variables)
+   Step 3: Identify unrelated code (COMMENT)
+   - All code NOT used by SDK operation
 
    **Example**:
    ```go
-   // SDK operation
+   // SDK operation (already known from Phase 1: DynamoDB PutItem)
    result, err := dynamoDB.PutItem(ctx, &dynamodb.PutItemInput{
        TableName: aws.String("entities"),
-       Item: item,  // ← Trace this
+       Item: item,
    })
 
-   // Backward trace
-   item := buildItem(entity)        // KEEP (defines 'item')
-   entity := req.ToEntity()         // KEEP (defines 'entity')
-   req := parseRequest(r)           // KEEP (defines 'req')
+   // SDK-related (KEEP) - builds SDK input
+   item := buildItem(entity)
+   entity := req.ToEntity()
+   req := parseRequest(r)
 
-   // Not in trace
-   userData := userRepo.Get(ctx)    // COMMENT (not used in SDK operation)
-   logger.Info("processing")        // COMMENT (not used in SDK operation)
-   metrics.Increment("calls")       // COMMENT (not used in SDK operation)
+   // Unrelated (COMMENT) - not used by SDK operation
+   userData := userRepo.Get(ctx)
+   logger.Info("processing")
+   metrics.Increment("calls")
    ```
 
-   Return format for entire call chain:
+   Return format:
    ```
    Call chain: [entry] → [intermediate] → [target]
    SDK operations: [list]
 
    Function 1: [entry_function] at [file:line]
-   Code blocks to KEEP (traced variables):
-   - Lines X-Y: [variable names in trace]
+   SDK-related code (KEEP):
+   - Lines X-Y: [description]
 
-   Code blocks to COMMENT:
-   - Lines A-B: Not in SDK input trace
-   - Lines C-D: Not in SDK input trace
+   Unrelated code (COMMENT):
+   - Lines A-B: [description]
+   - Lines C-D: [description]
 
    Function 2: [intermediate_function] at [file:line]
-   Code blocks to KEEP:
-   - Lines M-N: [variable names in trace]
+   SDK-related code (KEEP):
+   - Lines M-N: [description]
 
-   Code blocks to COMMENT:
-   - Lines P-Q: Not in SDK input trace
+   Unrelated code (COMMENT):
+   - Lines P-Q: [description]
    ```"
 
    C. **Verify Step B identified code blocks (optional sanity check)**
@@ -416,7 +412,7 @@ Keep only code directly related to AWS SDK operation's data flow using backward 
       - For each function in call chain (entry → target):
         - For each code block marked as COMMENT:
           - Use Edit tool to comment out the block
-          - Add simple comment: `// Commented out for testing: Not in SDK input trace`
+          - Add simple comment: `// Commented out for testing: Unrelated to SDK operation`
           - Use `//` line comments for all lines
 
    Example:
@@ -428,7 +424,7 @@ Keep only code directly related to AWS SDK operation's data flow using backward 
    }
 
    // Modified:
-   // Commented out for testing: Not in SDK input trace
+   // Commented out for testing: Unrelated to SDK operation
    // userData, err := h.userRepo.GetUser(ctx, userID)
    // if err != nil {
    //     return err
@@ -453,7 +449,7 @@ Keep only code directly related to AWS SDK operation's data flow using backward 
 
    Example:
    ```go
-   // Commented out for testing: Not in SDK input trace
+   // Commented out for testing: Unrelated to SDK operation
    // businessDate := dateRepo.GetBusinessDate(ctx)
    businessDate := "20250101" // Dummy for testing
    ```
@@ -495,55 +491,43 @@ Keep only code directly related to AWS SDK operation's data flow using backward 
 8. **Analyze AWS SDK operation with Task tool** (subagent_type=general-purpose)
    Task prompt: "For function [function_name] at [file_path:line_number] with call chain [selected_chain]:
 
-   1. Identify AWS SDK operation type using Read:
-      - Find AWS SDK v2 client method calls: `client\.GetItem`, `client\.PutItem`, etc.
-      - Classify operation type:
-        - Read operations: GetItem, GetObject, DescribeTable, etc.
-        - Delete operations: DeleteItem, DeleteObject, etc.
-        - Write operations: PutItem, PutObject, UpdateItem, etc.
-      - Extract operation name and line number
+   **Context from Phase 1**:
+   - SDK operation: [operation_name from Phase 1] (e.g., DynamoDB PutItem)
+   - Operation type: [Read/Write/Delete from operation name]
+   - Function location: [file:line from Phase 1]
 
-   2. Extract AWS settings from [function_name] using Read:
+   1. Extract AWS settings from [function_name] using Read:
       - Region: look for `WithRegion\|AWS_REGION`
       - Resource: table name, bucket name from client call parameters
       - Endpoint: look for `WithEndpointResolver\|endpoint`
 
-   3. Document v1 → v2 changes from git diff:
+   2. Document v1 → v2 changes from git diff:
       - Client init: session.New vs config.LoadDefaultConfig
       - API call: old vs new method signature
       - Type changes: aws.String vs direct string usage
 
-   Return: AWS operation type (Read/Delete/Write), operation name, line number, AWS settings, migration summary. Use [selected_chain] as call chain (do not re-trace)."
+   Return: AWS settings, migration summary. Use [selected_chain] as call chain (do not re-trace)."
 
 9. **Generate minimal test data with Task tool** (subagent_type=general-purpose)
 
    Task prompt: "For target function [function_name] with AWS SDK operation [operation_name]:
 
-   **Simplified approach**: Skip detailed analysis, generate minimal test data
+   **Context from Phase 1**:
+   - Operations in chain: [list from Phase 1] (e.g., [Query, UpdateItem, TransactWriteItems])
+   - Operation types: [Read/Write/Delete for each operation]
 
-   **Pre-insert requirement detection**:
-
-   For each chain, classify ALL AWS SDK operations and determine Pre-insert needs:
-
-   1. List all operations in chain (example: [Query, UpdateItem, TransactWriteItems])
-   2. Classify by type:
-      - Read: Query, GetItem, GetObject, Scan, BatchGetItem
-      - Delete: DeleteItem, DeleteObject, BatchDeleteItem
-      - Write: PutItem, UpdateItem, TransactWriteItems
-   3. Determine Pre-insert requirement:
-      - ANY Read operation → Generate Pre-insert for EACH Read
-      - ANY Delete operation → Generate Pre-insert for EACH Delete target
-      - Only Write operations → No Pre-insert needed
+   **Pre-insert requirement** (based on Phase 1 operation types):
+   - ANY Read operation → Generate Pre-insert for EACH Read
+   - ANY Delete operation → Generate Pre-insert for EACH Delete target
+   - Only Write operations → No Pre-insert needed
 
    Example:
    ```
-   Chain: DELETE /api/v1/entities/:id
-   Operations: [Query, UpdateItem, TransactWriteItems]
-   Classification: Read=1, Write=2, Delete=0
+   Operations from Phase 1: [Query (Read), UpdateItem (Write), TransactWriteItems (Write)]
    Result: Generate Pre-insert for Query operation only
    ```
 
-   If AWS operation is Read or Delete:
+   If operation type is Read or Delete (from Phase 1):
    1. Use Read to identify AWS SDK call parameters (table name, key, bucket, etc.)
    2. Generate 1-2 minimal test records matching those parameters
    3. Use correct Go types (pointer allocation with `aws.String`, `aws.Int64`, etc.)
@@ -554,14 +538,12 @@ Keep only code directly related to AWS SDK operation's data flow using backward 
    - Insertion line number (line before AWS SDK call)
    - Required imports (aws SDK packages)
 
-   If AWS operation is Write:
-   - Return: \"No Pre-insert needed for Write operation\"
-
-   Keep it simple - no complex validation, no downstream analysis, no field requirement mapping."
+   If operation type is Write (from Phase 1):
+   - Return: \"No Pre-insert needed for Write operation\""
 
 10. **Apply Pre-insert code with Edit tool**
 
-   If AWS operation is Read or Delete:
+   If operation type is Read or Delete (from Phase 1):
 
    A. Insert Pre-insert code from step 9:
       - Use Edit tool to insert before AWS SDK operation
