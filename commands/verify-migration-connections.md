@@ -4,50 +4,45 @@ Output language: Japanese, formal business tone
 
 ## Command Purpose
 
-This command **prepares code for AWS SDK v2 connection testing** by **temporarily modifying migrated code** to enable focused verification:
+Prepares code for AWS SDK v2 connection testing by temporarily modifying migrated code:
 
-**What this command does:**
-1. **Extract and analyze** migrated functions from current branch (already migrated to AWS SDK v2)
-2. **Comment out unrelated code** in call chains to isolate target AWS SDK operations (Phase 3)
-   - Removes other AWS SDK calls, external APIs, logging, metrics, etc.
-   - Keeps only the data flow directly related to target AWS SDK operation
-   - **Why necessary**: Prevents unrelated code from interfering with targeted AWS SDK testing
-3. **Generate minimal test data** and pre-insert code to DynamoDB/S3 (Phase 4)
-4. **Output verification procedures** for AWS environment testing (Phase 5)
+1. Extract migrated functions from current branch
+2. Comment out unrelated code to isolate AWS SDK operations (Phase 3)
+3. Generate minimal test data (Phase 4)
+4. Output AWS environment verification procedures (Phase 5)
 
-**What you need to do after this command:**
-1. Review modified files in git diff
-2. Deploy modified code to AWS test environment
-3. Execute verification procedures from Step 14 output
-4. **Manually run `git restore .` to revert all changes** after verification completes
+**Post-execution steps:**
+1. Review `git diff`
+2. Deploy to AWS test environment
+3. Execute verification procedures (Step 14 output)
+4. Run `git restore .` to revert changes
 
-**Important**:
-- This command **modifies production code** in your local working tree
-- Changes are **NOT automatically reverted** - you must run `git restore .` manually
-- The goal is to create a testable state, not permanent test code
-- Phase 3 comment-out is **required** to isolate AWS SDK operations for testing
+**Critical notes:**
+- Modifies production code in working tree (not automatically reverted)
+- Phase 3 isolation is mandatory to prevent interference from unrelated code
+- Creates testable state, not permanent test code
 
 ## Prerequisites
 
 - Run from repository root
-- Current branch must contain AWS SDK Go v2 migration changes
 - Working tree can be dirty (uncommitted changes allowed)
 
 ## Process
 
 ### Phase 1: Extract Functions and Call Chains
 
-1. **Fetch and validate branch diff**
+1. **Validate branch has AWS SDK v2 changes**
    - Run: `git diff main...HEAD`
-   - If diff does not contain `github.com/aws/aws-sdk-go-v2` imports: output "このブランチはAWS SDK Go v2関連の変更を含んでいません" and stop
+   - Search for pattern: `github.com/aws/aws-sdk-go-v2`
+   - If not found: output "このブランチはAWS SDK Go v2関連の変更を含んでいません" and exit immediately
 
 2. **Extract functions and call chains with Task tool** (subagent_type=general-purpose)
    Task prompt: "Parse git diff and extract all functions/methods using AWS SDK v2 with their call chains.
 
-   Step 1: Extract functions. Search patterns:
-   - Import: `github.com/aws/aws-sdk-go-v2/service/*`
-   - Client calls: `client.PutItem`, `client.GetObject`, etc.
-   - Context parameter: functions with `context.Context` calling AWS clients
+   Step 1: Extract functions using Grep in this order:
+   1. Search for imports: `github.com/aws/aws-sdk-go-v2/service/*`
+   2. Search for client calls: `client\.(PutItem|GetObject|Query|UpdateItem|DeleteItem|PutObject|GetObject|DeleteObject|SendEmail|Publish)` pattern
+   3. Filter functions with `context.Context` parameter
 
    For each match, extract:
    - File path:line_number from diff headers
@@ -55,25 +50,28 @@ This command **prepares code for AWS SDK v2 connection testing** by **temporaril
    - AWS service from import path (dynamodb, s3, ses, etc.)
    - Operation from client method name (PutItem, GetObject, etc.)
 
-   Step 2: For each function, trace COMPLETE call chains including entry point using Grep:
+   Step 2: For each function from Step 1, trace COMPLETE call chains including entry point using Grep:
 
-   Entry point identification:
-   - API handlers: Extract HTTP method and route path from router definition
-     - Search for route registration: router.POST, router.GET, http.HandleFunc, etc.
-     - Extract full path: /v1/resources, /api/v2/items, etc.
-   - Task entry points: Extract command/binary name from cmd/ directory
-     - Example: cmd/process_task/main.go → process_task command
-   - CLI commands: Extract subcommand name and arguments
+   Entry point identification and verification:
+   1. Identify entry point type:
+      - API handlers: Search for route registration (router.POST, router.GET, http.HandleFunc)
+      - Task entry points: Search cmd/ directory for binary definitions
+      - CLI commands: Search for subcommand definitions
+   2. Extract entry point details:
+      - API: HTTP method + full path (/v1/resources, /api/v2/items)
+      - Task: Binary name (cmd/process_task/main.go → process_task)
+      - CLI: Subcommand name + arguments
+   3. Verify entry point exists using Grep/Glob before tracing
+      - If not found: mark function as "SKIP - No entry point"
 
-   Call chain tracing:
-   - Find entry points: `main\(`, `handler\(`, `ServeHTTP`, `Handle`
-   - Search function references to trace call paths
+   Call chain tracing (execute after entry point verification):
+   - Trace from verified entry points: `main\(`, `handler\(`, `ServeHTTP`, `Handle`
+   - Search function references to build call paths
    - Identify intermediate layers (usecase/service/repository/gateway)
-   - Build complete chains: entry → intermediate → SDK function
-   - For each chain, count all AWS SDK v2 method calls within the chain
-   - Mark chains with multiple SDK methods as high priority (will verify all operations together)
-   - Record all SDK operations in the chain for grouped verification
-   - Execute Grep searches in parallel for independent functions
+   - Build complete chains: verified_entry → intermediate → SDK function
+   - Count all AWS SDK v2 method calls in chain
+   - Record all SDK operations for grouped verification
+   - **Parallel execution**: Execute Grep searches in parallel for functions with independent call chains (no shared intermediate layers)
 
    Step 2.5: Verify active callers (exclude unused implementations)
 
@@ -84,20 +82,19 @@ This command **prepares code for AWS SDK v2 connection testing** by **temporaril
       - Mark as "SKIP - No active callers"
       - Exclude from call chain list
 
-   **Multiple path handling**:
-   When a function has multiple call chains, select simplest path:
-   1. Selection priority (choose first match):
-      - Fewest external dependencies (< 4 data sources preferred)
+   **Multiple path handling** (when function has 2+ call chains):
+   1. Apply exclusion criteria first (eliminate complex paths):
+      - Exclude if 6+ external dependencies (too many mocks needed)
+      - Exclude if 6+ chain hops (too deep call stack)
+      - Exclude if multiple validation layers (complex to satisfy)
+   2. From remaining paths, select by priority (choose first match):
+      - Fewest external dependencies (< 4 preferred)
       - Shortest chain length (< 4 hops preferred)
       - Direct entry point (main function or simple handler)
-   2. Exclude complex paths:
-      - 6+ external dependencies (too many mocks needed)
-      - 6+ chain hops (too deep call stack)
-      - Multiple validation layers (complex to satisfy)
-   3. Document path selection in output:
+   3. Document selection in output:
       ```
       Selected: POST /v1/entities (2 dependencies, 3 hops)
-      Skipped: Background job path (7 dependencies, 5 hops) - too complex
+      Excluded: Background job path (7 dependencies, 5 hops) - too complex
       ```
 
    Call chain format:
@@ -118,13 +115,11 @@ This command **prepares code for AWS SDK v2 connection testing** by **temporaril
    → DynamoDB PutItem
    ```
 
-   If call chain cannot be traced to entry point:
-   - Mark function as "SKIP - No entry point found"
-   - Exclude from optimal combination
-   - Do NOT include in verification output
-   - Log skipped functions for reference:
+   If entry point not verified (marked in Step 2):
+   - Exclude from call chain list immediately
+   - Log as skipped function:
      ```
-     スキップされた関数（呼び出し元不明）:
+     スキップされた関数（エントリーポイント不明）:
      - internal/service/file.go:123 FunctionName
      ```
 
@@ -204,14 +199,10 @@ This command **prepares code for AWS SDK v2 connection testing** by **temporaril
    Result: ChainB [+2 similar chains], ChainD
    ```
 
-   Step 3: Verify entry points
+   Step 3: Verify entry points (already verified in Phase 1 Step 2)
    For each selected chain:
-   1. Confirm entry point is traceable using Grep/Glob:
-      - API handler: Verify route registration
-      - Task command: Verify binary in cmd/
-      - CLI command: Verify subcommand definition
-   2. If entry point unconfirmed:
-      - Mark as "SKIP - No entry point"
+   1. Confirm entry point was verified in Phase 1
+   2. If entry point marked as "SKIP - No entry point" in Phase 1:
       - Remove from optimal combination
       - Add skipped operations back to uncovered set
       - Continue selection from remaining chains
@@ -314,11 +305,19 @@ This command **prepares code for AWS SDK v2 connection testing** by **temporaril
 
 **CRITICAL - MUST NOT SKIP**: This phase MUST be executed for ALL chains without exception.
 
+**Definition of "unrelated code"**:
+Code blocks are "unrelated" if they are NOT part of the target AWS SDK operation's data flow:
+- Keep: Code that prepares data for target SDK calls, or uses results from target SDK calls
+- Keep: All AWS SDK operations in the same connected data flow chain
+- Comment: AWS SDK calls with independent data flows (separate notifications, side effects)
+- Comment: External API calls (Repository/Gateway/Client methods, HTTP/gRPC clients)
+- Comment: Logging, metrics, validation not affecting target data flow
+
 **Why this is required**:
-- Isolates target AWS SDK operations (may be multiple in same data flow) by removing unrelated code
-- Prevents interference from independent AWS SDK calls, external APIs, logging, metrics
+- Isolates target AWS SDK operations by removing independent operations and external dependencies
+- Prevents interference from unrelated AWS SDK calls, external APIs, logging, metrics
 - Enables focused testing of connected SDK operations in the chain
-- Without this step, verification may test unrelated operations, making it harder to identify which SDK v2 migrations are working
+- Without this step, verification tests too many operations, making it harder to identify which SDK v2 migrations work
 
 6. **Comment out unrelated code in call chain functions (strict mode)**
 
@@ -423,28 +422,18 @@ This command **prepares code for AWS SDK v2 connection testing** by **temporaril
       - **ALL AWS SDK operations in the same connected data flow chain**
 
       **COMMENT (unrelated to target AWS SDK operation chain)**:
-      - AWS SDK service calls with INDEPENDENT data flows
-        - Example: Main flow uses DynamoDB+S3, separate notification flow uses SES
-        - Only comment if the SDK call doesn't contribute to main operation result or doesn't use main operation data
+      - AWS SDK calls with independent data flows (e.g., main flow uses DynamoDB+S3, separate SES notification)
       - **External API calls**:
-        - **Repository/Gateway/Client layer method calls**: `*Repository`, `*Gateway`, `*Client` type instance methods
+        - Repository/Gateway/Client methods: `*Repository`, `*Gateway`, `*Client` instance methods
           - Examples: `userRepo.GetUser()`, `dataRepo.FetchData()`, `seqRepo.GetNext()`
-          - **Detection patterns**:
-            1. Type patterns: `type.*Repository`, `type.*Gateway`, `type.*Client`
-            2. Method call patterns: `repo\..*\(`, `gateway\..*\(`, `client\..*\(`
-            3. Common method prefixes: `Get*`, `Fetch*`, `Register*`, `Update*`, `Delete*`
-        - **HTTP/gRPC clients**: `http.Client`, `grpc.ClientConn` usage
-        - **External system integrations**: Business date APIs, third-party services, authentication services
-        - **Identification method**:
-          1. Search for Repository/Gateway/Client interface method calls
-          2. Search for external system names in package/type names
-          3. Identify network I/O operations
+          - Patterns: `(repo|gateway|client)\.(Get|Fetch|Register|Update|Delete)`
+        - HTTP/gRPC clients: `http.Client`, `grpc.ClientConn` usage
+        - External integrations: business date APIs, third-party services, auth services
       - Database operations not in target data flow
-      - Logging statements
-      - Metrics collection
+      - Logging, metrics collection
       - Validation not affecting target data flow
       - Business logic on independent variables
-      - Side effects (notifications, cache updates, etc.)
+      - Side effects (notifications, cache updates)
 
    5. For each COMMENT block, document reason:
       ```go
@@ -656,32 +645,26 @@ This command **prepares code for AWS SDK v2 connection testing** by **temporaril
 
    **Simplified approach**: Skip detailed analysis, generate minimal test data
 
-   **Read/Delete operation detection for entire chain**:
+   **Pre-insert requirement detection**:
 
-   For each chain, identify ALL operations (not just the primary operation):
+   For each chain, classify ALL AWS SDK operations and determine Pre-insert needs:
 
-   Step 1: List all AWS SDK operations in the chain
-   - Example: [Query, UpdateItem, TransactWriteItems]
+   1. List all operations in chain (example: [Query, UpdateItem, TransactWriteItems])
+   2. Classify by type:
+      - Read: Query, GetItem, GetObject, Scan, BatchGetItem
+      - Delete: DeleteItem, DeleteObject, BatchDeleteItem
+      - Write: PutItem, UpdateItem, TransactWriteItems
+   3. Determine Pre-insert requirement:
+      - ANY Read operation → Generate Pre-insert for EACH Read
+      - ANY Delete operation → Generate Pre-insert for EACH Delete target
+      - Only Write operations → No Pre-insert needed
 
-   Step 2: Classify each operation
-   - Read operations: Query, GetItem, GetObject, Scan, BatchGetItem
-   - Delete operations: DeleteItem, DeleteObject, BatchDeleteItem
-   - Write operations: PutItem, UpdateItem, TransactWriteItems, etc.
-
-   Step 3: Determine Pre-insert requirement
-   - If chain contains ANY Read operation → Generate Pre-insert for EACH Read operation
-   - If chain contains ANY Delete operation → Generate Pre-insert for EACH Delete target
-   - If chain contains only Write operations → No Pre-insert needed
-
-   **Example**:
+   Example:
    ```
    Chain: DELETE /api/v1/entities/:id
-   Operations: Query + UpdateItem + TransactWriteItems
-   Analysis:
-     - Query is Read → Needs Pre-insert code
-     - UpdateItem is Write → No Pre-insert
-     - TransactWriteItems is Write → No Pre-insert
-   Result: Generate Pre-insert for Query operation
+   Operations: [Query, UpdateItem, TransactWriteItems]
+   Classification: Read=1, Write=2, Delete=0
+   Result: Generate Pre-insert for Query operation only
    ```
 
    If AWS operation is Read or Delete:
