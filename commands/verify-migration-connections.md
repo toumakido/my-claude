@@ -36,67 +36,81 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    - Search stored diff for pattern: `github.com/aws/aws-sdk-go-v2`
    - If not found: output "このブランチはAWS SDK Go v2関連の変更を含んでいません" and exit immediately
 
-2. **Extract functions and call chains with Task tool** (subagent_type=general-purpose)
+2. **Extract entry points and call chains with Task tool** (subagent_type=general-purpose)
    **Context**: Use stored git diff from Step 1
-   Task prompt: "Extract all functions/methods using AWS SDK v2 from git diff and trace their complete call chains.
+   Task prompt: "Extract AWS SDK v2 operations by analyzing entry points first, then tracing SDK operations within each entry point.
 
-   **Step 1: Extract SDK functions using Grep**
+   **Step 1: Extract entry points**
 
-   Execute Grep searches in this exact order (run sequentially to build on previous results):
-   1. `pattern: "github\.com/aws/aws-sdk-go-v2/service/"`, `output_mode: "files_with_matches"`
-   2. `pattern: "client\.(PutItem|GetObject|Query|UpdateItem|DeleteItem|PutObject|DeleteObject|SendEmail|Publish)"`, `output_mode: "content"`, `-C: 10`
-   3. Filter results: keep only functions with `context.Context` parameter in signature
+   Execute Grep searches for entry point identification:
+   1. API endpoints: `pattern: "router\\.(POST|GET|PUT|DELETE|PATCH)"`, `output_mode: "content"`, `-C: 3`
+   2. Task binaries: `pattern: "func main"`, `path: "cmd/"`, `output_mode: "content"`, `-C: 5`
+   3. CLI commands: `pattern: "cli\\.(Command|App)"`, `output_mode: "content"`, `-C: 3`
 
    For each match, extract:
-   - File path:line_number (from Grep output)
-   - Function/method name (from function signature line)
-   - AWS service (from import path: dynamodb, s3, ses, sns)
-   - Operation (from client method call: PutItem, GetObject, etc.)
+   - Entry point type (API/Task/CLI)
+   - Entry point identifier (HTTP method + path, task name, CLI command)
+   - File path:line_number
 
-   **Step 2: Trace call chains**
+   **Step 2: For each entry point, extract ALL SDK operations**
 
-   Prerequisites: Entry point must exist and be verified before tracing
+   For each verified entry point:
+   1. Trace execution flow from entry to all SDK calls
+   2. Search for AWS SDK v2 imports: `pattern: "github\\.com/aws/aws-sdk-go-v2/service/"`, `output_mode: "files_with_matches"`
+   3. Search for SDK operations: `pattern: "client\\.(PutItem|GetObject|Query|UpdateItem|DeleteItem|PutObject|DeleteObject|SendEmail|Publish|TransactWriteItems|BatchWriteItem)"`, `output_mode: "content"`, `-C: 10`
+   4. Count SDK operations per entry point
+   5. Record operation types (DynamoDB Query, S3 PutObject, etc.)
+   6. Identify intermediate layers (usecase/service/repository/gateway)
+   7. Build complete chains: entry → intermediate → SDK functions
 
-   For each function from Step 1, trace COMPLETE call chains including entry point using Grep:
+   **Step 3: Classify and prioritize entry points**
 
-   Entry point identification and verification:
-   1. Identify entry point type:
-      - API handlers: Search for route registration (router.POST, router.GET, http.HandleFunc)
-      - Task entry points: Search cmd/ directory for binary definitions
-      - CLI commands: Search for subcommand definitions
-   2. Extract entry point details:
-      - API: HTTP method + full path (/v1/resources, /api/v2/items)
-      - Task: Binary name (cmd/process_task/main.go → process_task)
-      - CLI: Subcommand name + arguments
-   3. Verify entry point exists using Grep/Glob before tracing
-      - If not found: mark function as "SKIP - No entry point"
+   Classify entry points by SDK operation count:
+   - 統合チェーン (4+ operations): Highest priority
+   - 中規模チェーン (2-3 operations): Medium priority
+   - 単一操作チェーン (1 operation): Lowest priority
 
-   Call chain tracing (execute after entry point verification):
-   - Trace from verified entry points using Grep: `pattern: "main\(|handler\(|ServeHTTP|Handle)"`, `output_mode: "content"`
-   - Search function references: `pattern: "<function_name>\("`, `output_mode: "content"`
-   - Identify intermediate layers (usecase/service/repository/gateway)
-   - Build complete chains: verified_entry → intermediate → SDK function
-   - Count all AWS SDK v2 method calls in chain
-   - Record all SDK operations for grouped verification
-   - **Parallel execution**: Execute Grep searches in single tool call for functions that:
-     1. Have no shared intermediate layers (different service/repository files)
-     2. Belong to different API endpoints or tasks
-     3. Use different AWS services (e.g., DynamoDB vs S3)
+   **統合チェーン判定基準:**
 
-   **Step 3: Verify active callers**
+   Entry point内で以下の条件を満たす場合、統合チェーンとして扱う:
+   1. 同一関数/メソッド内から2つ以上の異なるSDK操作を呼び出す
+   2. または、直接の呼び出し先（1 hop以内）で複数のSDK操作が実行される
+   3. SDK操作間に明確な依存関係がある（例: Counter取得 → Record挿入）
 
-   **Parallel execution**: Execute in parallel with Step 2 (independent operations)
+   **統合チェーンの優先度:**
+   - 重複排除で最優先: 統合チェーンで複数の操作種別をカバーできる場合、単一操作チェーンは排除
+   - 例: 統合ChainがQuery + UpdateItem + PutItemをカバーする場合、個別のQuery専用Chain、UpdateItem専用Chainは重複として排除
 
-   For each extracted function from Step 1:
-   1. Use Grep: `pattern: "<function_name>\("`, `glob: "!(*_test.go|mocks/*.go)"`, `output_mode: "files_with_matches"`
-   2. Count result files (active call sites in production code)
-   3. If count = 0:
-      - Mark as "SKIP - No active callers"
-      - Exclude from call chain list
+   **Step 4: Verify active usage (2段階検証)**
 
-   **Step 4: Handle multiple paths**
+   **4-1. Static call site verification:**
+   - For each extracted function from Step 2:
+   - Grep for function calls: `pattern: "<function_name>\\("`, `glob: "!(*_test.go|mocks/*.go)"`, `output_mode: "files_with_matches"`
+   - If count = 0: Mark as "SKIP - No active callers" and exclude immediately
 
-   When function has 2+ call chains:
+   **4-2. Interface implementation verification (for methods):**
+   - If function is method on interface implementation:
+     1. Find interface definition
+     2. Search for interface usage in production code
+     3. Verify this specific implementation is actually instantiated
+   - Example check:
+     ```
+     // Check if DIRFile.GetUnusedResource is actually called
+     1. Find DIRFile interface usage
+     2. Verify which implementation is used (dirFile struct)
+     3. Confirm GetUnusedResource is invoked on that implementation
+     ```
+
+   **4-3. Entry point reachability check:**
+   - For functions with call sites, verify they're reachable from valid entry points
+   - Exclude:
+     - Functions only called from test code
+     - Functions in feature-flagged code that's disabled
+     - Functions in deprecated code paths
+
+   **Step 5: Handle multiple paths**
+
+   When entry point has 2+ call chains:
    1. Apply exclusion criteria first (eliminate complex paths):
       - Exclude if 6+ external dependencies (too many mocks needed)
       - Exclude if 6+ chain hops (too deep call stack)
@@ -111,10 +125,29 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
       Excluded: Background job path (7 dependencies, 5 hops) - too complex
       ```
 
-   **Step 5: Format output**
+   **Step 6: Format output for hierarchical structure**
 
    CRITICAL: List EVERY function in the call chain with file:line, not just SDK function.
    Omitting intermediate functions will cause Phase 3 to miss external service calls and business logic.
+
+   **統合チェーンの出力形式 (hierarchical structure):**
+
+   統合チェーンは階層構造で表示し、共通部分と個別SDK操作を明確に分離:
+   ```
+   統合Chain: [entry_type] [identifier] [★ Multiple SDK: N operations]
+
+   Entry → Intermediate layers (共通):
+   Entry: [type] [identifier]
+   → [file:line] EntryFunction
+   → [file:line] IntermediateFunction
+
+   SDK Functions (個別):
+   [ChainID]-A. [file:line] IntermediateFunction → ... → [file:line] SDKFunction1
+        Operation: [Service] [Operation1]
+
+   [ChainID]-B. [file:line] IntermediateFunction → ... → [file:line] SDKFunction2
+        Operation: [Service] [Operation2]
+   ```
 
    **Format for single SDK operation:**
    ```
@@ -126,24 +159,6 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    → AWS SDK v2 API (Operation)
    ```
 
-   **Format for multiple SDK operations (hierarchical structure):**
-   ```
-   Chain: [entry_type] [identifier] [★ Multiple SDK: N operations]
-
-   Entry → Intermediate layers:
-   Entry: [type] [identifier]
-   → [file:line] EntryFunction
-   → [file:line] IntermediateFunction1
-   → [file:line] IntermediateFunction2
-
-   SDK Functions (Phase 3 targets):
-   [ChainID]-A. [file:line] SDKFunction1
-        Operation: [Service] [Operation1]
-
-   [ChainID]-B. [file:line] SDKFunction2
-        Operation: [Service] [Operation2]
-   ```
-
    Example (single SDK operation):
    ```
    Entry: Task task_name
@@ -153,25 +168,27 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    → DynamoDB UpdateItem
    ```
 
-   Example (multiple SDK operations):
+   Example (multiple SDK operations with hierarchical structure):
    ```
-   Chain: Task task_name [★ Multiple SDK: 3 operations]
+   統合Chain: Task batch_task [★ Multiple SDK: 4 operations]
 
-   Entry → Intermediate layers:
-   Entry: Task task_name
-   → cmd/task_name/main.go:100 main
-   → internal/tasks/task_worker.go:50 Execute
-   → internal/service/service_name.go:80 ProcessData
+   Entry → Intermediate layers (共通):
+   Entry: Task batch_task
+   → cmd/batch_task/main.go:136 main()
+   → internal/tasks/batch_worker.go:40 Execute()
 
-   SDK Functions (Phase 3 targets):
-   1-A. internal/service/service_name.go:120 createRecord
-        Operation: DynamoDB PutItem
+   SDK Functions (個別):
+   A. internal/tasks/batch_worker.go:41 → internal/service/entity_datastore.go:79 GetByIndex() → internal/service/entity_datastore.go:105 db.Query()
+      Operation: DynamoDB Query
 
-   1-B. internal/service/service_name.go:150 updateRecord
-        Operation: DynamoDB UpdateItem
+   B. internal/tasks/batch_worker.go:134 → internal/service/counter.go:37 GetNext() → internal/service/counter.go:60 db.UpdateItem()
+      Operation: DynamoDB UpdateItem (×2)
 
-   1-C. internal/service/service_name.go:180 processTransaction
-        Operation: DynamoDB TransactWriteItems
+   C. internal/tasks/batch_worker.go:167 → internal/service/file_storage.go:235 insertRecord() → internal/service/file_storage.go:254 db.PutItem()
+      Operation: DynamoDB PutItem (×2)
+
+   D. internal/tasks/batch_worker.go:116 → internal/service/entity_datastore.go:421 Update() → internal/service/entity_datastore.go:519 db.TransactWriteItems()
+      Operation: DynamoDB TransactWriteItems
    ```
 
    BAD example (incomplete, missing intermediate functions):
@@ -188,7 +205,7 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    - ALL SDK functions with file:line (for multiple SDK operations, list separately under "SDK Functions")
    - If any function lacks file:line, re-run Step 2 with explicit instruction to trace ALL functions
 
-   If entry point not verified (marked in Step 2):
+   If entry point not verified (marked in Step 4):
    - Exclude from call chain list immediately
    - Log as skipped function:
      ```
@@ -196,18 +213,21 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
      - internal/service/file.go:123 FunctionName
      ```
 
-   **Step 6: Sort by priority**
-   1. First: Chains with multiple AWS SDK methods (higher priority)
-   2. Within same SDK method count: Sort by chain length (shorter = easier)
+   **Step 7: Sort by priority**
+   1. First: 統合チェーン (4+ SDK operations) - highest priority
+   2. Second: 中規模チェーン (2-3 SDK operations) - medium priority
+   3. Third: 単一操作チェーン (1 SDK operation) - lowest priority
+   4. Within same SDK operation count: Sort by chain length (shorter = easier)
 
    Example priority order:
-   - Chain with 3 SDK methods, 4 hops (highest)
-   - Chain with 2 SDK methods, 2 hops
-   - Chain with 2 SDK methods, 5 hops
-   - Chain with 1 SDK method, 2 hops
-   - Chain with 1 SDK method, 4 hops (lowest)
+   - 統合Chain with 4 SDK operations, 5 hops (highest)
+   - 中規模Chain with 3 SDK operations, 4 hops
+   - 中規模Chain with 2 SDK operations, 2 hops
+   - 中規模Chain with 2 SDK operations, 5 hops
+   - 単一操作Chain with 1 SDK operation, 2 hops
+   - 単一操作Chain with 1 SDK operation, 4 hops (lowest)
 
-   Return: Filtered function list with only actively called functions, all call chains sorted by priority, skipped functions list (including unused implementations)."
+   Return: Filtered function list with only actively called functions, all call chains sorted by priority (統合チェーン first), skipped functions list (including unused implementations)."
 
 3. **Deduplicate chains with coverage-based selection (Task tool)** (subagent_type=general-purpose)
    Task prompt: "Deduplicate call chains using coverage-based selection algorithm:
@@ -336,36 +356,128 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 
 ### Phase 2: Batch Approval
 
-5. **Present optimal combination and get batch approval**
+5. **Present optimal combination with complete details and get batch approval**
 
-   A. Display summary of optimal combination:
+   A. Display complete details for each chain before approval:
+
+   **For each chain, display:**
+   1. Entry point type and identifier (API/Task/CLI)
+   2. Complete call chain with file:line for ALL functions
+   3. External dependencies (HTTP clients, other services)
+   4. SDK operation details:
+      - Operation type (Create/Update/Read/Delete)
+      - Resource (table name, bucket name)
+      - Pre-insert requirements
+
+   **Display format for single SDK operation:**
    ```
-   === バッチ処理する組み合わせ ===
+   [N]. Chain: [entry_type] [identifier]
+
+   Entry → Complete call chain:
+   Entry: [type] [identifier]
+   → [file:line] EntryFunction                           [External: None]
+   → [file:line] IntermediateFunction1                   [External: HTTP Client]
+   → [file:line] IntermediateFunction2                   [External: None]
+   → [file:line] SDKFunction                             ← [Service] [Operation]
+
+   SDK Operation:
+   - Type: [Create/Update/Read/Delete]
+   - Resource: [table_name/bucket_name]
+   - Pre-insert required: [Yes/No]
+
+   External Dependencies: [count] ([list])
+   Estimated complexity: [Low/Medium/High] ([N] operations, [M] external deps)
+   ```
+
+   **Display format for multiple SDK operations:**
+   ```
+   [N]. Chain: [entry_type] [identifier] [★ Multiple SDK: M operations]
+
+   Entry → Complete call chain:
+   Entry: [type] [identifier]
+   → [file:line] EntryFunction                           [External: None]
+   → [file:line] IntermediateFunction                    [External: None]
+
+   → [file:line] BranchFunction1                         [External: None]
+   → [file:line] SDKFunction1                            ← [Service] [Operation1]
+
+   → [file:line] BranchFunction2                         [External: HTTP Client]
+   → [file:line] SDKFunction2                            ← [Service] [Operation2]
+
+   → [file:line] BranchFunction3                         [External: None]
+   → [file:line] SDKFunction3                            ← [Service] [Operation3]
+
+   SDK Operations Summary:
+   - [Service] [Operation1] ([Type]): Pre-insert [required/not needed]
+   - [Service] [Operation2] ([Type]): Pre-insert [required/not needed]
+   - [Service] [Operation3] ([Type]): Pre-insert [required/not needed]
+
+   External Dependencies: [count] ([list])
+   Estimated complexity: [Low/Medium/High] ([M] operations, [N] external deps)
+   ```
+
+   **Example (multiple SDK operations with complete details):**
+   ```
+   3. Chain: Task batch_task [★ Multiple SDK: 4 operations]
+
+   Entry → Complete call chain:
+   Entry: Task batch_task
+   → cmd/batch_task/main.go:136 main()
+   → internal/tasks/batch_worker.go:40 Execute()
+   → internal/tasks/batch_worker.go:41 dataRepo.GetByIndex()     [External: None]
+   → internal/service/entity_datastore.go:79 GetByIndex()
+   → internal/service/entity_datastore.go:105 db.Query()         ← DynamoDB Query
+
+   → internal/tasks/batch_worker.go:134 counterRepo.GetNext()   [External: None]
+   → internal/service/counter.go:37 GetNext()
+   → internal/service/counter.go:60 db.UpdateItem()              ← DynamoDB UpdateItem (×2)
+
+   → internal/tasks/batch_worker.go:167 fileRepo.Insert()       [External: None]
+   → internal/service/file_storage.go:235 insertRecord()
+   → internal/service/file_storage.go:254 db.PutItem()          ← DynamoDB PutItem (×2)
+
+   → internal/tasks/batch_worker.go:116 dataRepo.Update()       [External: None]
+   → internal/service/entity_datastore.go:421 Update()
+   → internal/service/entity_datastore.go:519 db.TransactWriteItems() ← DynamoDB TransactWriteItems
+
+   SDK Operations Summary:
+   - DynamoDB Query (Read): Requires Pre-insert
+   - DynamoDB UpdateItem (Update): Requires Pre-insert
+   - DynamoDB PutItem (Create): No Pre-insert needed
+   - DynamoDB TransactWriteItems (Update): Requires Pre-insert
+
+   External Dependencies: None (all operations are AWS SDK only)
+   Estimated complexity: Medium (4 operations, 0 external deps)
+   ```
+
+   **チェックリスト (ユーザー確認用):**
+   ```
+   承認前に以下を確認:
+   □ 全てのチェーンのエントリーポイントが明確か
+   □ 外部依存関係（HTTP/gRPC）が許容範囲内か
+   □ Pre-insert要件を満たせるか
+   □ 統合チェーンの利点を活かしているか
+   □ 未使用関数が含まれていないか
+   ```
+
+   B. Display summary of optimal combination:
+   ```
+   === バッチ処理する組み合わせサマリー ===
 
    合計SDK関数数: N個
-   - Read操作: X個
-   - Write操作: Y個
-   - Delete操作: Z個
-   - 複数SDK使用: W個
-
-   処理対象のチェーン:
-   1. [Entry Point]
-      → [Handler/Task file:line] HandlerMethod
-      → [Service file:line] ServiceMethod
-      → [Target file:line] TargetFunction
-      → AWS SDK v2 API (Operation)
-   2. [Next Entry Point]
-      → [file:line] Method
-      → ...
-      → AWS SDK v2 API (Operation)
+   - Create操作: A個
+   - Update操作: B個 (Pre-insert必要)
+   - Read操作: X個 (Pre-insert必要)
+   - Delete操作: Z個 (Pre-insert必要)
+   - 統合チェーン: W個 (複数SDK使用)
 
    検証方法のグループ化ポリシー:
-   - Phase 4の動作確認手順では、実行方法（API/Task）ごとにグループ化して出力
+   - Phase 5の動作確認手順では、実行方法（API/Task）ごとにグループ化して出力
    - 同じエンドポイント/タスクで確認できる複数の関数は、単一の実行コマンドにまとめて記載
    - 関数ごとに重複した手順を出力しない
    ```
 
-   B. Request batch approval with AskUserQuestion:
+   C. Request batch approval with AskUserQuestion:
    - question: "この組み合わせでN個のSDK関数をバッチ処理しますか？"
    - header: "Batch"
    - multiSelect: false
@@ -373,7 +485,7 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
      - label: "はい", description: "N個のSDK関数を全自動で順次処理"
      - label: "いいえ", description: "キャンセルして終了"
 
-   C. Handle response:
+   D. Handle response:
    - If "はい" selected: proceed to Phase 3 (batch processing)
    - If "いいえ" selected: exit with "処理をキャンセルしました"
 
@@ -931,45 +1043,50 @@ After Phase 3, verify all unrelated code is commented out:
 合計SDK関数数: 7個 (重複排除前: 10個のチェーン)
 選択されたチェーン数: 4個
 
-[Sorted by priority: multiple SDK methods first, then by chain length]
+[Sorted by priority: 統合チェーン (4+ operations) first, then 中規模チェーン (2-3 operations), then 単一操作チェーン]
 
-1. Chain: Task task_name_1 [★ Multiple SDK: 3 operations]
+1. 統合Chain: Task task_name_1 [★ Multiple SDK: 3 operations]
 
-   Entry → Intermediate layers:
+   Entry → Intermediate layers (共通):
    Entry: Task task_name_1
    → cmd/task_name_1/main.go:100 main
    → internal/tasks/task_worker.go:50 Execute
    → internal/service/service_name.go:80 ProcessData
 
-   SDK Functions (Phase 3 targets):
-   1-A. internal/service/service_name.go:120 createRecord
+   SDK Functions (個別):
+   1-A. internal/service/service_name.go:120 createRecord()
+        → internal/service/service_name.go:125 db.PutItem()
         Operation: DynamoDB PutItem
 
-   1-B. internal/service/service_name.go:150 storeFile
+   1-B. internal/service/service_name.go:150 storeFile()
+        → internal/storage/s3_client.go:45 client.PutObject()
         Operation: S3 PutObject
 
-   1-C. internal/service/service_name.go:180 sendMessage
+   1-C. internal/service/service_name.go:180 sendMessage()
+        → internal/notification/email.go:30 client.SendEmail()
         Operation: SES SendEmail
 
    (3 SDK operations, 5 hops) Active callers: 2箇所
 
-2. Chain: POST /v1/resource/action [★ Multiple SDK: 2 operations] [+1 other chain]
+2. 中規模Chain: POST /v1/resource/action [★ Multiple SDK: 2 operations] [+1 other chain]
 
-   Entry → Intermediate layers:
+   Entry → Intermediate layers (共通):
    Entry: API POST /v1/resource/action
    → internal/api/handler/v1/handler_name.go:80 HandleAction
    → internal/gateway/gateway_name.go:89 ProcessAction
 
-   SDK Functions (Phase 3 targets):
-   2-A. internal/gateway/gateway_name.go:120 fetchData
+   SDK Functions (個別):
+   2-A. internal/gateway/gateway_name.go:120 fetchData()
+        → internal/storage/s3_gateway.go:67 client.GetObject()
         Operation: S3 GetObject
 
-   2-B. internal/gateway/gateway_name.go:200 saveBatch
+   2-B. internal/gateway/gateway_name.go:200 saveBatch()
+        → internal/repository/batch_repo.go:123 client.BatchWriteItem()
         Operation: DynamoDB BatchWriteItem
 
    (2 SDK operations, 4 hops) Active callers: 1箇所
 
-3. Chain: Task task_name_2 [+2 other chains]
+3. 単一操作Chain: Task task_name_2 [+2 other chains]
 
    Entry: Task task_name_2
    → cmd/task_name_2/main.go:50 main
@@ -979,7 +1096,7 @@ After Phase 3, verify all unrelated code is commented out:
 
    (1 SDK operation, 3 hops) Active callers: 3箇所
 
-4. Chain: API GET /v1/resource/:id
+4. 単一操作Chain: API GET /v1/resource/:id
 
    Entry: API GET /v1/resource/:id
    → internal/api/handler/v1/handler_name.go:100 GetResource
@@ -992,52 +1109,102 @@ After Phase 3, verify all unrelated code is commented out:
 
 ### Batch Approval Summary (Phase 2)
 ```
-=== バッチ処理する組み合わせ ===
+=== バッチ処理する組み合わせ（詳細版） ===
 
-合計SDK関数数: 7個
-- Create操作: 4個
+合計SDK関数数: 6個
+- Create操作: 3個
 - Update操作: 0個
-- Read操作: 2個
+- Read操作: 2個 (Pre-insert必要)
 - Delete操作: 0個
-- 複数SDK使用: 2個
+- 統合チェーン: 2個 (複数SDK使用)
 
 処理対象のチェーン:
 
-1. Chain: Task task_name_1 [★ Multiple SDK: 3 operations]
-   Entry → Intermediate layers:
+1. 統合Chain: Task task_name_1 [★ Multiple SDK: 3 operations]
+
+   Entry → Complete call chain:
    Entry: Task task_name_1
-   → cmd/task_name_1/main.go:100 main
-   → internal/tasks/task_worker.go:50 Execute
-   → internal/service/service_name.go:80 ProcessData
+   → cmd/task_name_1/main.go:100 main()
+   → internal/tasks/task_worker.go:50 Execute()
+   → internal/service/service_name.go:80 ProcessData()
 
-   SDK Functions:
-   1-A. internal/service/service_name.go:120 createRecord | DynamoDB PutItem
-   1-B. internal/service/service_name.go:150 storeFile | S3 PutObject
-   1-C. internal/service/service_name.go:180 sendMessage | SES SendEmail
+   → internal/service/service_name.go:120 createRecord()        [External: None]
+   → internal/service/service_name.go:125 db.PutItem()          ← DynamoDB PutItem
 
-2. Chain: POST /v1/resource/action [★ Multiple SDK: 2 operations]
-   Entry → Intermediate layers:
+   → internal/service/service_name.go:150 storeFile()           [External: None]
+   → internal/storage/s3_client.go:45 client.PutObject()        ← S3 PutObject
+
+   → internal/service/service_name.go:180 sendMessage()         [External: None]
+   → internal/notification/email.go:30 client.SendEmail()       ← SES SendEmail
+
+   SDK Operations Summary:
+   - DynamoDB PutItem (Create): No Pre-insert needed
+   - S3 PutObject (Create): No Pre-insert needed
+   - SES SendEmail (Create): No Pre-insert needed
+
+   External Dependencies: None
+   Estimated complexity: Low (3 operations, 0 external deps)
+
+2. 中規模Chain: POST /v1/resource/action [★ Multiple SDK: 2 operations]
+
+   Entry → Complete call chain:
    Entry: API POST /v1/resource/action
-   → internal/api/handler/v1/handler_name.go:80 HandleAction
-   → internal/gateway/gateway_name.go:89 ProcessAction
+   → internal/api/handler/v1/handler_name.go:80 HandleAction()
+   → internal/gateway/gateway_name.go:89 ProcessAction()
 
-   SDK Functions:
-   2-A. internal/gateway/gateway_name.go:120 fetchData | S3 GetObject
-   2-B. internal/gateway/gateway_name.go:200 saveBatch | DynamoDB BatchWriteItem
+   → internal/gateway/gateway_name.go:120 fetchData()           [External: None]
+   → internal/storage/s3_gateway.go:67 client.GetObject()       ← S3 GetObject
 
-3. Chain: Task task_name_2
+   → internal/gateway/gateway_name.go:200 saveBatch()           [External: None]
+   → internal/repository/batch_repo.go:123 client.BatchWriteItem() ← DynamoDB BatchWriteItem
+
+   SDK Operations Summary:
+   - S3 GetObject (Read): Requires Pre-insert
+   - DynamoDB BatchWriteItem (Create): No Pre-insert needed
+
+   External Dependencies: None
+   Estimated complexity: Medium (2 operations, 0 external deps)
+
+3. 単一操作Chain: Task task_name_2
+
+   Entry → Complete call chain:
    Entry: Task task_name_2
-   → cmd/task_name_2/main.go:50 main
-   → internal/usecase/usecase_name.go:30 Execute
-   → internal/repository/repository_name.go:45 Save
-   → DynamoDB PutItem
+   → cmd/task_name_2/main.go:50 main()
+   → internal/usecase/usecase_name.go:30 Execute()              [External: None]
+   → internal/repository/repository_name.go:45 Save()
+   → internal/repository/repository_name.go:48 db.PutItem()     ← DynamoDB PutItem
 
-4. Chain: API GET /v1/resource/:id
+   SDK Operation:
+   - Type: Create
+   - Resource: entities_table
+   - Pre-insert required: No
+
+   External Dependencies: None
+   Estimated complexity: Low (1 operation, 0 external deps)
+
+4. 単一操作Chain: API GET /v1/resource/:id
+
+   Entry → Complete call chain:
    Entry: API GET /v1/resource/:id
-   → internal/api/handler/v1/handler_name.go:100 GetResource
-   → internal/service/service_name.go:50 Fetch
-   → internal/repository/repository_name.go:89 Get
-   → DynamoDB GetItem
+   → internal/api/handler/v1/handler_name.go:100 GetResource()
+   → internal/service/service_name.go:50 Fetch()                [External: None]
+   → internal/repository/repository_name.go:89 Get()
+   → internal/repository/repository_name.go:92 db.GetItem()     ← DynamoDB GetItem
+
+   SDK Operation:
+   - Type: Read
+   - Resource: resources_table
+   - Pre-insert required: Yes
+
+   External Dependencies: None
+   Estimated complexity: Low (1 operation, 0 external deps)
+
+チェックリスト:
+□ 全てのチェーンのエントリーポイントが明確か
+□ 外部依存関係（HTTP/gRPC）が許容範囲内か
+□ Pre-insert要件を満たせるか
+□ 統合チェーンの利点を活かしているか
+□ 未使用関数が含まれていないか
 ```
 
 ### Comment-out Summary (Phase 3)
