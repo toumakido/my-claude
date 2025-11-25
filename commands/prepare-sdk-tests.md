@@ -4,14 +4,6 @@ This command prepares AWS SDK v2 migrated code for connection testing by modifyi
 
 **IMPORTANT**: This command modifies production code. All changes are reviewable via `git diff` and can be reverted with `git checkout .`.
 
-## Usage
-
-```
-/prepare-sdk-tests
-```
-
-Run this command from the repository root directory after running `/extract-sdk-chains`.
-
 ## When to Use This Command
 
 Use this command when:
@@ -144,13 +136,66 @@ For each SDK operation in `.migration-chains.json`:
    - Run: `go build -o /tmp/test-build ./...`
    - If fails: Fix errors (missing imports, type mismatches), retry until success
 
-4. **Display progress**
+4. **Verify execution flow with test data** (Read/Edit/Bash tools)
+
+   For each chain in current processing batch:
+
+   a. **Read all functions in call chain** (Read tool)
+      - Entry function
+      - All intermediate functions
+      - SDK function
+
+   b. **Analyze execution flow**
+      - Identify conditional branches (if/switch/for)
+      - Check each condition works with dummy/test data
+      - Identify error handling that may trigger prematurely
+      - Check for uninitialized variables
+      - Verify type compatibility with dummy values
+
+   c. **Fix issues if found** (Edit tool)
+      Priority order: Critical (compilation error/panic) → Warning (early return) → Info
+      - Adjust dummy values to pass conditions
+      - Comment out premature error checks
+      - Initialize variables needed in execution path
+      - Fix type mismatches
+
+   d. **Verify compilation after fixes** (Bash tool)
+      - Run: `go build -o /tmp/test-build ./...`
+      - If fails: Apply additional fixes, retry
+
+5. **Display progress**
    ```
    完了 (N/M): テストデータ準備
    SDK function: [file:line] [function_name]
    - 操作種別: Create/Update/Read/Delete
    - Pre-insert: 追加済み / 不要
+   - 実行フロー検証: OK / 修正適用
    - コンパイル: 成功
+   ```
+
+### Phase 2.5: Verify Comment-out Completeness
+
+After Phase 1 completion, verify all unrelated code is properly commented out.
+
+1. **Verify external service calls are commented** (Grep tool)
+   - Pattern: `pattern: "http\\.(Get|Post|Client)|grpc\\.(Dial|NewClient)"`
+   - Options: `output_mode: "content"`, `-C: 5`, `glob: "!(*_test.go)"`
+   - For each match in modified files (from `.migration-chains.json`):
+     - Check if line starts with `//`
+     - If uncommented in modified chain functions: ERROR and exit with message to re-run Phase 1
+
+2. **Verify response processing is minimized** (Grep tool)
+   - Pattern: `pattern: "parseAttributes|ToEntity|for.*resp\\.(Items|Records)"`
+   - Options: `output_mode: "content"`, `glob: "!(*_test.go)"`
+   - For each match in modified files:
+     - Check if commented or replaced with simple log
+     - If complex processing remains in modified chain functions: ERROR and exit with message to re-run Phase 1
+
+3. **Display verification result**
+   ```
+   === Phase 2.5: Comment-out検証完了 ===
+   - 外部サービス呼び出し: すべてコメント済み
+   - レスポンス処理: 最小化済み
    ```
 
 ### Phase 3: Final Verification
@@ -187,6 +232,9 @@ After completion, verify:
 - [ ] `go build` succeeds for all modified packages
 - [ ] Update/Read/Delete operations have pre-insert code
 - [ ] Create operations have no pre-insert code
+- [ ] External service calls are commented out (Phase 2.5 verification)
+- [ ] Response processing is minimized (Phase 2.5 verification)
+- [ ] Execution flow works with test data (Phase 2 step 4)
 
 ## Error Handling
 
@@ -204,6 +252,18 @@ After completion, verify:
 **"Phase 1-3 incomplete - pre-insert missing"**
 - Cause: Update/Read/Delete operation without pre-insert
 - Solution: Check operation type classification in `.migration-chains.json`
+
+**"Phase 2.5 failed - external calls not commented"**
+- Cause: HTTP/gRPC calls remain uncommented in modified functions
+- Solution: Re-run Phase 1 to ensure all external dependencies are commented
+
+**"Phase 2.5 failed - response processing not minimized"**
+- Cause: Complex response parsing (parseAttributes, ToEntity) remains
+- Solution: Re-run Phase 1 to remove response processing logic
+
+**"Execution flow verification failed"**
+- Cause: Dummy values don't satisfy conditional branches or cause runtime errors
+- Solution: Command auto-fixes in Phase 2 step 4c, adjust dummy values manually if needed
 
 ## Example
 

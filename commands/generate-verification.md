@@ -2,12 +2,6 @@
 
 Generates AWS environment verification procedures for testing SDK v2 migration connections.
 
-## Usage
-
-```
-/generate-verification
-```
-
 ## Prerequisites
 
 - `.migration-chains.json` exists (created by `/extract-sdk-chains`)
@@ -96,6 +90,55 @@ Generates AWS environment verification procedures for testing SDK v2 migration c
    - [Service] [Op2] × M回
    - Data flow: Op1 → Op2
    ```
+
+   **Complete example**:
+   ```markdown
+   ## Chain 1: Task batch_task [★ Multiple SDK: 4 operations]
+
+   ### コールチェーン
+   Entry → Intermediate layers (共通):
+   Entry: Task batch_task
+   → cmd/batch_task/main.go:136 main()
+   → internal/tasks/batch_worker.go:40 Execute()
+
+   SDK Functions (個別):
+   A. internal/tasks/batch_worker.go:41 → internal/service/entity_datastore.go:79 GetByIndex()
+      → internal/service/entity_datastore.go:105 db.Query()
+      Operation: DynamoDB Query
+
+   B. internal/tasks/batch_worker.go:134 → internal/service/counter.go:37 GetNext()
+      → internal/service/counter.go:60 db.UpdateItem()
+      Operation: DynamoDB UpdateItem (×2)
+
+   C. internal/tasks/batch_worker.go:167 → internal/service/file_storage.go:235 insertRecord()
+      → internal/service/file_storage.go:254 db.PutItem()
+      Operation: DynamoDB PutItem (×2)
+
+   D. internal/tasks/batch_worker.go:116 → internal/service/entity_datastore.go:421 Update()
+      → internal/service/entity_datastore.go:519 db.TransactWriteItems()
+      Operation: DynamoDB TransactWriteItems
+
+   ### 実行コマンド
+   ```bash
+   aws ecs run-task \
+     --cluster production-cluster \
+     --task-definition batch_task:latest \
+     --launch-type FARGATE
+   ```
+
+   ### X-Ray確認ポイント
+   - DynamoDB Query × 1回 (entities table)
+   - DynamoDB UpdateItem × 2回 (counter table)
+   - DynamoDB PutItem × 2回 (files table)
+   - DynamoDB TransactWriteItems × 1回 (entities table)
+   - Data flow: Query entities → Update counter → Put files → TransactWrite entities
+   ```
+
+   **DO NOT include:**
+   - Summary statistics (processed SDK functions count, etc.)
+   - File modification details (commented files, edited files)
+   - Compilation results
+   - Next steps or actions
 
 7. **Generate document header**:
 
