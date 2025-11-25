@@ -853,7 +853,7 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    Operation: [Service] [Operation]
    ```
 
-   B. Execute steps 8-10 for current chain
+   B. Execute steps 8-10.5 for current chain
 
 8. **Analyze AWS SDK operation with Task tool** (subagent_type=general-purpose)
    Task prompt: "For function [function_name] at [file_path:line_number]:
@@ -950,7 +950,126 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
       - コンパイル: 成功
       ```
 
-   D. **Verify Pre-insert code completeness**
+10.5. **Verify call chain execution flow with test data**
+
+   Execute execution flow analysis for current chain.
+
+   A. **Analyze execution flow with Task tool** (subagent_type=general-purpose)
+
+   Task prompt: "For current call chain being processed:
+
+   **Tools**: Read tool to load function source code
+
+   **Target chain**: [Copy chain details from loop context]
+   - Entry: [type] [identifier]
+   - Call chain: [file:line] function list from entry to SDK function
+   - SDK operation: [Service] [Operation]
+
+   **Analysis objective**: Verify test data enables expected execution flow
+
+   **Analysis procedure**:
+
+   Step 1: Load all functions in call chain
+   - Entry function at [file:line]
+   - ALL intermediate functions at [file:line]
+   - SDK function at [file:line]
+
+   Step 2: Trace execution flow with test data context
+   - Identify conditional branches (if/switch/for)
+   - Check each branch condition against test data
+   - Verify expected path is taken
+
+   Step 3: Identify potential runtime issues
+   - Error handling that may trigger prematurely
+   - Uninitialized variables accessed in execution path
+   - Type mismatches with dummy values
+   - Nil pointer dereferences
+
+   Step 4: Classify findings by severity
+   - Critical: Causes compilation error or runtime panic
+   - Warning: May cause unexpected path or early return
+   - Info: Optimization opportunity
+
+   **Return format**:
+   ```
+   Chain: [entry_type] [identifier]
+   SDK function: [file:line] [function_name]
+
+   Analysis results:
+   - Conditional branches: [N branches analyzed]
+     - Expected path: [OK / ISSUE]
+   - Error handling: [M error checks analyzed]
+     - Premature errors: [None / List]
+   - Variable initialization: [OK / ISSUE]
+   - Type compatibility: [OK / ISSUE]
+
+   Issues found (if any):
+   [Severity] [file:line] [description]
+   - Suggested fix: [description]
+
+   Overall: [PASS / NEEDS_FIX]
+   ```"
+
+   B. **Fix issues if found**
+
+   If Step A returned "Overall: NEEDS_FIX":
+
+   1. For each issue in priority order (Critical → Warning → Info):
+      - Apply fix using Edit tool
+      - Output: "修正適用: [file:line] [description]"
+
+   2. Verify compilation after ALL fixes:
+      - Run: `go build -o /tmp/test-build 2>&1`
+      - If fails: Analyze error, apply additional fixes, retry
+      - Repeat until success
+      - Output: "コンパイル成功: 実行フロー修正完了"
+
+   If Step A returned "Overall: PASS":
+      - Skip to Step C
+
+   C. **Display verification result**
+
+   For single SDK operation:
+   ```
+   === 実行フロー検証 (i/N) ===
+   Chain: [entry_type] [identifier]
+   SDK function: [file:line] [function_name]
+
+   分析結果:
+   - 条件分岐: [OK / 修正適用]
+   - エラーハンドリング: [OK / 修正適用]
+   - 変数初期化: [OK / 修正適用]
+   - 型互換性: [OK / 修正適用]
+
+   修正内容: (修正があった場合のみ)
+   - [file:line] [description]
+
+   検証完了 (i/N): 実行フロー
+   ```
+
+   For multiple SDK operations:
+   ```
+   === 実行フロー検証 (i/N, SDK function [N]-A) ===
+   Chain: [entry_type] [identifier] [★ Multiple SDK]
+   SDK function: [N]-A. [file:line] [function_name]
+
+   分析結果:
+   - 条件分岐: [OK / 修正適用]
+   - エラーハンドリング: [OK / 修正適用]
+   - 変数初期化: [OK / 修正適用]
+   - 型互換性: [OK / 修正適用]
+
+   修正内容: (修正があった場合のみ)
+   - [file:line] [description]
+
+   検証完了 (i/N, SDK function [N]-A): 実行フロー
+   ```
+
+11. **Automatic progression**
+   - If i < N: continue to next chain (repeat from step 7.A)
+   - If i = N: proceed to step 12
+
+12. **Verify Pre-insert code completeness**
 
    After processing all chains, verify Pre-insert code for Update/Read/Delete operations:
 
@@ -966,9 +1085,7 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
       - All have Pre-insert → "検証完了: Pre-insertコード生成済み (N operations)"
       - Missing Pre-insert → ERROR: "Phase 4 incomplete - Pre-insert missing", HALT
 
-11. **Automatic progression**
-   - If i < N: continue to next chain (repeat from step 7.A)
-   - If i = N: proceed to Phase 3.5
+   4. After verification: proceed to Phase 3.5
 
 ### Phase 3.5: Verify Comment-out Completeness
 
@@ -1365,13 +1482,14 @@ D. internal/tasks/batch_worker.go:116 → internal/service/entity_datastore.go:5
 ### Key Process Steps
 - Phase 3, step 6: Comment out code unrelated to SDK operation
 - Phase 4, step 9: Generate minimal test data
-- Phase 4, step 11: Run `go build`, auto-fix errors
+- Phase 4, step 10.5: Verify call chain execution flow with test data
+- Phase 4, step 12: Run `go build`, auto-fix errors
 
 ### Batch Processing Flow
 1. Phase 1: Extract and deduplicate (automatic)
 2. Phase 2: Single batch approval (AskUserQuestion)
 3. Phase 3: Comment out unrelated code (automatic)
-4. Phase 4: Generate test data, verify compilation (automatic)
+4. Phase 4: Generate test data, verify execution flow, verify compilation (automatic)
 5. Phase 5: Output AWS verification procedures (チェーンごとの動作確認手順)
 
 ## Notes
@@ -1387,6 +1505,7 @@ D. internal/tasks/batch_worker.go:116 → internal/service/entity_datastore.go:5
 - **Comment-out** (step 6): Comment unrelated code blocks, verify compilation
 - **Test data** (step 9): Generate minimal test data (1-2 records) for Update/Read/Delete
 - **Pre-insert** (step 10): Insert test data, verify compilation
+- **Execution flow** (step 10.5): Verify call chain execution with test data, fix logic issues
 
 ### Output Guidelines
 - Include file:line references
