@@ -63,6 +63,31 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    6. Identify intermediate layers (usecase/service/repository/gateway)
    7. Build complete chains: entry → intermediate → SDK functions
 
+   **エントリーポイント特定の要件 (CRITICAL):**
+
+   For API entry points:
+   - MUST identify specific HTTP endpoint: method + path (e.g., "GET /v1/account-transfer/:id")
+   - MUST identify handler function: file:line HandlerFunctionName (e.g., "internal/api/handler/v1/account_transfer.go:50 GetAccountTransfer")
+   - MUST trace from router definition to handler to service/repository layers
+   - Tracking method for API endpoints:
+     1. Search for function usage in handler layer: `pattern: "[function_name]"`, `path: "internal/api/handler/"`, `output_mode: "content"`, `-C: 5`
+     2. For each handler function found, search for router registration: `pattern: "router\\.(GET|POST|PUT|DELETE|PATCH).*[handler_function_name]"`, `output_mode: "content"`, `-C: 5`
+     3. Extract: HTTP method, path, handler file:line
+     4. If no router registration found: Mark as "SKIP - No entry point"
+
+   For Task entry points:
+   - MUST identify cmd/*/main.go with main() function
+   - MUST include task name from directory structure
+
+   For CLI entry points:
+   - MUST identify cmd/cli/*/main.go with command definition
+   - MUST include command name
+
+   **エントリーポイントが特定できない場合:**
+   - Mark as "SKIP - No entry point found"
+   - Log: "[file:line] [function_name] - No entry point (not called from API/Task/CLI)"
+   - Exclude from call chain list in Step 7
+
    **Step 3: Classify and prioritize entry points**
 
    Classify entry points by SDK operation count:
@@ -81,12 +106,13 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    - 重複排除で最優先: 統合チェーンで複数の操作種別をカバーできる場合、単一操作チェーンは排除
    - 例: 統合ChainがQuery + UpdateItem + PutItemをカバーする場合、個別のQuery専用Chain、UpdateItem専用Chainは重複として排除
 
-   **Step 4: Verify call chain validity (optional false positive check)**
+   **Step 4: Verify call chain validity (MANDATORY for single-operation chains)**
 
-   NOTE: Since Step 2 builds call chains FROM entry points, functions unreachable from entry points are automatically excluded. This step only handles edge cases.
+   Execute for ALL chains where entry point is not explicitly from cmd/*/main.go or verified API endpoint.
 
    **When to execute Step 4:**
-   - Only if Step 2 extracted functions that might be false positives
+   - For all single-operation chains from repository/service layers
+   - When entry point format is ambiguous or missing handler information
    - Example: Multiple types have same method name (e.g., `Save()` exists on both UserRepo and OrderRepo)
 
    **4-1. Verify receiver type for methods (false positive check):**
@@ -119,12 +145,25 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
       - Mark as "SKIP - Interface mismatch"
       - Exclude from call chain list
 
-   **Verification summary:**
+   **4-3. Verify API endpoint registration:**
+
+   For repository/service functions without clear entry point:
+   1. Search for function calls in handler layer: `pattern: "[function_name]"`, `path: "internal/api/handler/"`, `output_mode: "content"`, `-C: 5`
+   2. If found in handlers, search for router registration: `pattern: "router\\.(GET|POST|PUT|DELETE|PATCH).*[handler_name]"`, `output_mode: "content"`, `-C: 5`
+   3. If router registration not found:
+      - Mark as "SKIP - No API endpoint"
+      - Log: "Excluded: [file:line] [function_name] - Not registered in router"
+      - Exclude from call chain list
+
+   **4-4. Output verification summary:**
+
    After Step 4, output (only if exclusions occurred):
    ```
-   Excluded false positives:
+   Excluded chains (validation failed):
    - Wrong receiver type: X個
    - Interface mismatch: Y個
+   - No API endpoint: Z個
+   - No task/CLI entry: W個
 
    [file:line] [function_name] - [reason]
    ...
@@ -136,7 +175,9 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    - Functions unreachable from entry points (tracing stops before reaching them)
    - Test-only functions (excluded by starting from production entry points)
 
-   No separate reachability check needed.
+   However, Step 4 validation catches:
+   - Repository/service functions without API/Task/CLI entry points
+   - Functions with ambiguous entry point format
 
    **Step 5: Handle multiple paths**
 
@@ -233,6 +274,35 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    → cmd/task_name/main.go main
    → internal/service/service_name.go:80 ProcessData
    → DynamoDB UpdateItem
+   ```
+
+   BAD example (ambiguous entry point - FORBIDDEN):
+   ```
+   Chain: AccountTransferDatastore.GetAccountTransfer
+
+   Entry → Complete call chain:
+   Entry: API (various handlers)  ← 曖昧、禁止
+   → internal/service/account_transfer_datastore.go:55 GetAccountTransfer()
+   → internal/service/account_transfer_datastore.go:67 db.GetItem()
+   ```
+
+   GOOD example (specific API endpoint - REQUIRED):
+   ```
+   Chain: API GET /v1/account-transfer/:id
+
+   Entry → Complete call chain:
+   Entry: API GET /v1/account-transfer/:id
+   → internal/api/handler/v1/account_transfer.go:50 GetAccountTransfer()  ← ハンドラー明示
+   → internal/service/account_transfer_datastore.go:55 GetAccountTransfer()
+   → internal/service/account_transfer_datastore.go:67 db.GetItem()
+   ```
+
+   If entry point cannot be determined (must be excluded):
+   ```
+   スキップされた関数（エントリーポイント不明）:
+   - internal/service/account_transfer_datastore.go:55 GetAccountTransfer - No API endpoint
+   - internal/service/dir_file.go:71 GetBindingResult - No API endpoint
+   - internal/service/dir_file.go:283 UnbindSmartplusAccountWithFile - No API endpoint
    ```
 
    **Validation**: After Task tool completes, verify output includes:
@@ -394,6 +464,24 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 ### Phase 2: Batch Approval
 
 5. **Present optimal combination with complete details and get batch approval**
+
+   **Pre-approval validation:**
+
+   For each chain in optimal combination:
+   - Verify entry point format matches requirements:
+     - Task: "Task [name]" with cmd/[name]/main.go reference
+     - API: "API [METHOD] [path]" with handler file:line reference
+     - CLI: "CLI [command]" with cmd/cli/*/main.go reference
+
+   - If entry point is ambiguous (e.g., "API (various handlers)", missing handler, no router definition):
+     - ERROR: "Invalid entry point format for chain: [chain_description]"
+     - Log: "Chain excluded from batch approval: [file:line] [function_name] - [reason]"
+     - Remove from optimal combination
+     - Continue validation with remaining chains
+
+   - If all chains fail validation:
+     - Output: "バッチ承認可能なチェーンがありません。全てのチェーンでエントリーポイントが特定できませんでした。"
+     - Exit command
 
    A. Display complete details for each chain before approval:
 
