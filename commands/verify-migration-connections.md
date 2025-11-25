@@ -23,9 +23,9 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 ## Prerequisites
 
 - Run from repository root
-- Working tree can be dirty (uncommitted changes allowed)
-- gh CLI installed and authenticated
 - Git repository with AWS SDK v2 migration changes
+- gh CLI installed and authenticated
+- Working tree can be dirty (uncommitted changes allowed)
 
 ## Process
 
@@ -42,14 +42,14 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 
    **Step 1: Extract entry points**
 
-   Execute Grep searches for entry point identification:
+   Execute Grep searches in parallel (independent):
    1. API endpoints: `pattern: "router\\.(POST|GET|PUT|DELETE|PATCH)"`, `output_mode: "content"`, `-C: 3`
    2. Task binaries: `pattern: "func main"`, `path: "cmd/"`, `output_mode: "content"`, `-C: 5`
    3. CLI commands: `pattern: "cli\\.(Command|App)"`, `output_mode: "content"`, `-C: 3`
 
-   For each match, extract:
-   - Entry point type (API/Task/CLI)
-   - Entry point identifier (HTTP method + path, task name, CLI command)
+   For each Grep result, extract:
+   - Entry point type: API/Task/CLI
+   - Entry point identifier: HTTP method + path for API, task name for Task, command name for CLI
    - File path:line_number
 
    **Step 2: For each entry point, extract ALL SDK operations**
@@ -593,11 +593,11 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    ```
 
    C. Request batch approval with AskUserQuestion:
-   - question: "この組み合わせでN個のSDK関数をバッチ処理しますか？"
+   - question: "この組み合わせで{N}個のSDK関数をバッチ処理しますか？" (replace {N} with actual count)
    - header: "Batch"
    - multiSelect: false
    - options:
-     - label: "はい", description: "N個のSDK関数を全自動で順次処理"
+     - label: "はい", description: "{N}個のSDK関数を全自動で順次処理" (replace {N} with actual count)
      - label: "いいえ", description: "キャンセルして終了"
 
    D. Handle response:
@@ -675,7 +675,7 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    **For SINGLE SDK operation chains:**
    Task prompt: "For call chain [chain_id] from Phase 1:
 
-   **Tools to use**: Read tool for loading source code, no Grep/Glob needed
+   **Tools to use**: Read tool ONLY (load source code directly)
 
    **Context from Phase 1** (copy complete chain):
    ```
@@ -692,9 +692,9 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    Function 3: [file:line] SDKFunction (sdk)
 
    For EACH function above:
-   Step 1: Load function source code
-   Step 2: Identify SDK-related code (KEEP)
-   Step 3: Identify unrelated code (COMMENT)
+   Step 1: Load function source code with Read tool
+   Step 2: Identify SDK-related code (KEEP) per classification criteria
+   Step 3: Identify unrelated code (COMMENT) per classification criteria
 
    **For MULTIPLE SDK operation chains:**
    Task prompt: "For call chain [chain_id] from Phase 1 with [N] SDK operations:
@@ -719,21 +719,14 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    **Analysis procedure (optimize for shared layers):**
 
    Step 1: Analyze Entry/Intermediate layers ONCE
-   - Load function source code with Read tool
-   - Identify code unrelated to ANY SDK operation
-   - Common patterns to comment out:
-     - External HTTP/gRPC calls
-     - Validation not related to SDK input
-     - Data enrichment from non-AWS sources
+   - Load function source code with Read tool (if multiple files, load in parallel)
+   - Identify code unrelated to ANY SDK operation per classification criteria
+   - Common unrelated patterns: External HTTP/gRPC calls, validation not related to SDK input, data enrichment from non-AWS sources
 
    Step 2: Analyze EACH SDK function individually
-   - Load SDK function source code with Read tool
-   - Identify code unrelated to THIS specific operation
-   - Common patterns to comment out:
-     - Response parsing (parseAttributes, loops over resp.Items)
-     - Entity transformation (ToEntity)
-     - Pagination logic
-     - Detailed error wrapping
+   - Load SDK function source code with Read tool (if multiple files, load in parallel)
+   - Identify code unrelated to THIS specific operation per classification criteria
+   - Common unrelated patterns: Response parsing (parseAttributes, loops over resp.Items), entity transformation (ToEntity), pagination logic, detailed error wrapping
 
    **Objective**: Classify code into SDK-related (KEEP) and unrelated (COMMENT).
 
@@ -946,17 +939,13 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 8. **Analyze AWS SDK operation with Task tool** (subagent_type=general-purpose)
    Task prompt: "For function [function_name] at [file_path:line_number]:
 
-   **Tools**: Read for source code, Grep for pattern searches
+   **Tools**: Read for source code, Grep for pattern searches (execute independent Grep searches in parallel)
 
    **Context from Phase 1**:
    - SDK operation: [operation_name] (e.g., DynamoDB PutItem)
-   - Operation type (classify by name):
-     - Create: PutItem, PutObject, SendEmail, Publish
-     - Update: UpdateItem, TransactWriteItems
-     - Read: Query, GetItem, Scan, GetObject
-     - Delete: DeleteItem, DeleteObject
+   - Operation type classification: Create (PutItem, PutObject, SendEmail, Publish), Update (UpdateItem, TransactWriteItems), Read (Query, GetItem, Scan, GetObject), Delete (DeleteItem, DeleteObject)
 
-   **Extract AWS settings**:
+   **Extract AWS settings** (execute Grep searches in parallel):
    1. Region: Grep `pattern: "WithRegion|AWS_REGION"`, `output_mode: "content"`, `-C: 5`
    2. Resource: Read SDK call parameters (table name, bucket name)
    3. Endpoint: Grep `pattern: "WithEndpointResolver|endpoint"`, `output_mode: "content"`, `-C: 5`
@@ -976,11 +965,7 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 
    **Context from Phase 1**:
    - Operations in chain: [list]
-   - Operation types (classify by name):
-     - Create: PutItem, PutObject, SendEmail, Publish
-     - Update: UpdateItem, TransactWriteItems
-     - Read: Query, GetItem, Scan, GetObject
-     - Delete: DeleteItem, DeleteObject
+   - Operation type classification (from Step 8): Create/Update/Read/Delete
 
    **Pre-insert requirements**:
    - Create → No Pre-insert (creates new data)
@@ -1177,16 +1162,16 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 
 ### Phase 3.5: Verify Comment-out Completeness
 
-After Phase 3, verify all unrelated code is commented out:
+After Phase 3, verify all unrelated code is commented out by executing Grep searches in parallel (independent):
 
 1. Verify external service calls are commented:
    - Grep: `pattern: "http\\.(Get|Post|Client)|grpc\\.(Dial|NewClient)"`, `output_mode: "content"`, `-C: 5`, `glob: "!(*_test.go)"`
-   - For each match in modified files, check if it's commented out (line starts with `//`)
+   - For each match in modified files, check if line starts with `//`
    - If uncommented in modified chain functions: ERROR - re-run Phase 3
 
 2. Verify response processing is minimized:
    - Grep: `pattern: "parseAttributes|ToEntity|for.*resp\\.(Items|Records)"`, `output_mode: "content"`, `glob: "!(*_test.go)"`
-   - For each match in modified files, check if it's commented or replaced with log.Printf
+   - For each match in modified files, check if commented or replaced with log.Printf
    - If complex processing remains in modified chain functions: ERROR - re-run Phase 3
 
 ### Phase 5: AWS Verification Procedures
