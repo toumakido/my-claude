@@ -81,32 +81,93 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    - 重複排除で最優先: 統合チェーンで複数の操作種別をカバーできる場合、単一操作チェーンは排除
    - 例: 統合ChainがQuery + UpdateItem + PutItemをカバーする場合、個別のQuery専用Chain、UpdateItem専用Chainは重複として排除
 
-   **Step 4: Verify active usage (2段階検証)**
+   **Step 4: Verify active usage (3段階検証)**
 
-   **4-1. Static call site verification:**
-   - For each extracted function from Step 2:
-   - Grep for function calls: `pattern: "<function_name>\\("`, `glob: "!(*_test.go|mocks/*.go)"`, `output_mode: "files_with_matches"`
-   - If count = 0: Mark as "SKIP - No active callers" and exclude immediately
+   CRITICAL: This step must be executed for EVERY function extracted in Step 2 to prevent unused functions from being included.
 
-   **4-2. Interface implementation verification (for methods):**
-   - If function is method on interface implementation:
-     1. Find interface definition
-     2. Search for interface usage in production code
-     3. Verify this specific implementation is actually instantiated
-   - Example check:
-     ```
-     // Check if DIRFile.GetUnusedResource is actually called
-     1. Find DIRFile interface usage
-     2. Verify which implementation is used (dirFile struct)
-     3. Confirm GetUnusedResource is invoked on that implementation
-     ```
+   **4-1. Direct call site verification (実行必須):**
 
-   **4-3. Entry point reachability check:**
-   - For functions with call sites, verify they're reachable from valid entry points
-   - Exclude:
-     - Functions only called from test code
-     - Functions in feature-flagged code that's disabled
-     - Functions in deprecated code paths
+   For each function from Step 2:
+   1. Identify function signature:
+      - Regular function: `func FunctionName(`
+      - Method: `func (receiver Type) MethodName(` → Extract receiver type
+
+   2. Search for direct calls in production code:
+      - Regular function: `pattern: "FunctionName\\("`, `glob: "!(*_test.go|mocks/*.go|*_mock.go)"`, `output_mode: "files_with_matches"`
+      - Method: `pattern: "\\.MethodName\\("`, `glob: "!(*_test.go|mocks/*.go|*_mock.go)"`, `output_mode: "content"`, `-B: 5`
+
+   3. Verify receiver type (for methods only):
+      - Check if call site matches receiver type from function definition
+      - Example: If function is `func (r *repo) Save(`, verify call site uses `*repo` type
+      - Use grep pattern: `pattern: "receiver_type\\)"` in the -B context lines
+
+   4. Count valid call sites (exclude false positives from other types with same method name)
+
+   5. If count = 0:
+      - Mark as "SKIP - No active callers"
+      - Log: `Excluded: [file:line] [function_name] - No active callers in production code`
+      - Exclude from call chain list immediately
+      - Do NOT proceed to 4-2 or 4-3
+
+   **4-2. Interface implementation verification (メソッドの場合のみ実行):**
+
+   Execute ONLY if:
+   - Function is a method (has receiver)
+   - 4-1 found zero direct calls
+   - Method name suggests interface implementation (e.g., Get, Save, Update, Delete)
+
+   Steps:
+   1. Search for interface definitions containing this method:
+      `pattern: "type .* interface\\{[\\s\\S]*?MethodName\\([\\s\\S]*?\\}"`, `multiline: true`, `output_mode: "content"`
+
+   2. For each interface found, search for interface usage:
+      `pattern: "interfaceName"`, `glob: "!(*_test.go|mocks/*.go)"`, `output_mode: "content"`, `-C: 10`
+
+   3. Verify concrete type is used:
+      - Check if receiver type is assigned to interface variable
+      - Example: `var repo Repository = &concreteRepo{}` or `NewRepository() Repository { return &concreteRepo{} }`
+
+   4. Verify method is actually invoked on interface:
+      `pattern: "repo\\.MethodName\\("`, check if repo variable type matches interface
+
+   5. If NO valid interface usage found:
+      - Mark as "SKIP - Interface method never called"
+      - Log: `Excluded: [file:line] [Type.MethodName] - Defined but not used via interface`
+      - Exclude from call chain list
+
+   **4-3. Entry point reachability check (呼び出しが見つかった関数のみ実行):**
+
+   Execute ONLY if 4-1 or 4-2 found active callers.
+
+   Verify function is reachable from valid entry points (from Step 1):
+   1. Build call graph from entry points to this function:
+      - Start from entry points (API/Task/CLI) identified in Step 1
+      - Trace function calls recursively until reaching target function
+      - Use Grep to search for each intermediate function call
+
+   2. Exclude if only reachable from:
+      - Test code paths: Check if all paths go through `*_test.go` files
+      - Feature-flagged disabled code: Search for `if featureFlag.Enabled()` with flag set to false
+      - Deprecated code: Search for `// Deprecated` comments in caller chain
+
+   3. If NOT reachable from any valid entry point:
+      - Mark as "SKIP - Not reachable from entry points"
+      - Log: `Excluded: [file:line] [function_name] - Only called from test/deprecated code`
+      - Exclude from call chain list
+
+   **Verification summary:**
+   After Step 4, output:
+   ```
+   Active functions: N個
+   Excluded functions:
+   - No active callers: X個
+   - Interface method never called: Y個
+   - Not reachable from entry points: Z個
+
+   Detailed exclusion list:
+   [file:line] [function_name] - [reason]
+   ...
+   ```
 
    **Step 5: Handle multiple paths**
 
@@ -657,7 +718,7 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 
    // Unrelated (COMMENT) - not used by SDK operation
    userData := userRepo.Get(ctx)
-   logger.Info("processing")
+   log.Printf("processing")
    metrics.Increment("calls")
    ```
 
