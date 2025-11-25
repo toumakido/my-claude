@@ -32,19 +32,19 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    - Phase 5: MUST execute
 
 2. **FORBIDDEN actions - NEVER do these:**
-   - ❌ Do NOT evaluate whether phases are appropriate for this codebase
-   - ❌ Do NOT make independent judgments about production impact
-   - ❌ Do NOT skip phases based on codebase characteristics (financial, important, production, etc.)
-   - ❌ Do NOT consider alternative approaches (existing tests, make test, unit tests, etc.)
-   - ❌ Do NOT reason about "better" or "safer" ways to verify
-   - ❌ Do NOT provide explanations for why phases should be skipped
-   - ❌ Do NOT evaluate risk or appropriateness
+   - FORBIDDEN: Do NOT evaluate whether phases are appropriate for this codebase
+   - FORBIDDEN: Do NOT make independent judgments about production impact
+   - FORBIDDEN: Do NOT skip phases based on codebase characteristics (financial, important, production, etc.)
+   - FORBIDDEN: Do NOT consider alternative approaches (existing tests, make test, unit tests, etc.)
+   - FORBIDDEN: Do NOT reason about "better" or "safer" ways to verify
+   - FORBIDDEN: Do NOT provide explanations for why phases should be skipped
+   - FORBIDDEN: Do NOT evaluate risk or appropriateness
 
 3. **Required behavior:**
-   - ✓ Execute each phase exactly as specified
-   - ✓ Follow all steps in sequential order
-   - ✓ Complete ALL steps before proceeding to next phase
-   - ✓ Trust that the command design accounts for all scenarios
+   - REQUIRED: Execute each phase exactly as specified
+   - REQUIRED: Follow all steps in sequential order
+   - REQUIRED: Complete ALL steps before proceeding to next phase
+   - REQUIRED: Trust that the command design accounts for all scenarios
 
 4. **Context you MUST understand:**
    - This command creates TEMPORARY modifications for AWS SDK v2 testing
@@ -61,10 +61,20 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 
 **Your ONLY job:** Execute phases 1-5 exactly as written, without judgment or evaluation.
 
+## EXECUTION POLICY FOR TASK TOOL INVOCATIONS
+
+**This policy applies to ALL Task tool invocations throughout this command:**
+- Processing time is NOT a constraint
+- Accuracy and completeness are MORE important than speed
+- Do NOT optimize for time efficiency
+- Do NOT skip steps to save time
+- Take as much time as needed to complete thoroughly
+
+**Reference:** When you see "**Execution policy:** See EXECUTION POLICY section" in any Task prompt, apply the policy stated above.
+
 ## Prerequisites
 
 - Run from repository root
-- Git repository with AWS SDK v2 migration changes
 - gh CLI installed and authenticated
 - Working tree can be dirty (uncommitted changes allowed)
 
@@ -74,26 +84,21 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 
 1. **Validate branch has AWS SDK v2 changes**
    - Run: `git diff main...HEAD` and store result in variable
-   - Search stored diff for pattern: `github.com/aws/aws-sdk-go-v2`
-   - If not found: output "このブランチはAWS SDK Go v2関連の変更を含んでいません" and exit immediately
+   - Search stored diff using Grep tool: `pattern: "github.com/aws/aws-sdk-go-v2"`, `output_mode: "content"`
+   - If Grep returns empty result: output "このブランチはAWS SDK Go v2関連の変更を含んでいません" and exit immediately
 
 2. **Extract entry points and call chains with Task tool** (subagent_type=general-purpose)
    **Context**: Use stored git diff from Step 1
    Task prompt: "Extract AWS SDK v2 operations by analyzing entry points first, then tracing SDK operations within each entry point.
 
-   **Execution policy:**
-   - Processing time is NOT a constraint
-   - Accuracy and completeness are MORE important than speed
-   - Do NOT optimize for time efficiency
-   - Do NOT skip steps to save time
-   - Take as much time as needed to complete thoroughly
+   **Execution policy:** See EXECUTION POLICY FOR TASK TOOL INVOCATIONS section
 
    **Step 1: Extract entry points**
 
-   Execute Grep searches in parallel (independent):
-   1. API endpoints: `pattern: "router\\.(POST|GET|PUT|DELETE|PATCH)"`, `output_mode: "content"`, `-C: 3`
-   2. Task binaries: `pattern: "func main"`, `path: "cmd/"`, `output_mode: "content"`, `-C: 5`
-   3. CLI commands: `pattern: "cli\\.(Command|App)"`, `output_mode: "content"`, `-C: 3`
+   Execute 3 independent Grep searches in parallel:
+   1. Grep tool: `pattern: "router\\.(POST|GET|PUT|DELETE|PATCH)"`, `output_mode: "content"`, `-C: 3`
+   2. Grep tool: `pattern: "func main"`, `path: "cmd/"`, `output_mode: "content"`, `-C: 5`
+   3. Grep tool: `pattern: "cli\\.(Command|App)"`, `output_mode: "content"`, `-C: 3`
 
    For each Grep result, extract:
    - Entry point type: API/Task/CLI
@@ -121,8 +126,8 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
       - Receiver type (if method): Extract from variable declaration or parameter type
 
    b. **Locate function definition**
-      - Search with Grep: `pattern: "func.*[FunctionName]"`, `output_mode: "content"`, `-C: 3`
-      - If multiple matches: Filter by receiver type or package path
+      - Search with Grep tool: `pattern: "func.*[FunctionName]"`, `output_mode: "content"`, `-C: 3`
+      - If multiple matches: Use Read tool to load each match, compare receiver type (for methods) or package path (for functions) with caller context, select the matching definition
       - If zero matches: Mark as "BROKEN CHAIN - Function not found" and exclude
 
    c. **Verify call relationship**
@@ -184,7 +189,7 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    Found call: worker.Execute()
 
    Step 2: Grep "func.*Execute" → Found internal/tasks/worker.go:40
-   Verify: main() contains "worker.Execute()" ✓
+   Verify: main() contains "worker.Execute()" [VERIFIED]
    Chain: main() → worker.go:40 Execute()
 
    Step 3: Read internal/tasks/worker.go:40
@@ -193,18 +198,18 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    Step 4a: Trace dataRepo.GetByIndex()
    Grep "func.*GetByIndex" → Found internal/service/datastore.go:79
    Read datastore.go:79 → Found db.Query() [SDK operation]
-   Chain: Execute() → datastore.go:79 GetByIndex() → datastore.go:105 db.Query() ✓
+   Chain: Execute() → datastore.go:79 GetByIndex() → datastore.go:105 db.Query() [VERIFIED]
 
    Step 4b: Trace counterRepo.GetNext()
    Grep "func.*GetNext" → Found internal/service/counter.go:37
    Read counter.go:37 → Found db.UpdateItem() [SDK operation]
-   Chain: Execute() → counter.go:37 GetNext() → counter.go:60 db.UpdateItem() ✓
+   Chain: Execute() → counter.go:37 GetNext() → counter.go:60 db.UpdateItem() [VERIFIED]
 
    Step 4c: Trace fileRepo.Insert()
    Grep "func.*Insert" → Multiple matches
    Filter by receiver type "*fileRepo" → internal/service/storage.go:235
    Read storage.go:235 → Found db.PutItem() [SDK operation]
-   Chain: Execute() → storage.go:235 Insert() → storage.go:254 db.PutItem() ✓
+   Chain: Execute() → storage.go:235 Insert() → storage.go:254 db.PutItem() [VERIFIED]
 
    Result: 3 SDK operations from this entry point
    ```
@@ -300,7 +305,8 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    **4-3. Verify API endpoint registration:**
 
    For repository/service functions without clear entry point:
-   1. Search for function calls in handler layer: `pattern: "[function_name]"`, `path: "internal/api/handler/"`, `output_mode: "content"`, `-C: 5`
+   1. Search for function usage in handler layer using Grep tool: `pattern: "\\b[function_name]\\b"`, `path: "internal/api/handler/"`, `output_mode: "content"`, `-C: 5`
+      Note: Use word boundaries (\\b) to avoid false matches in comments or string literals
    2. If found in handlers, search for router registration: `pattern: "router\\.(GET|POST|PUT|DELETE|PATCH).*[handler_name]"`, `output_mode: "content"`, `-C: 5`
    3. If router registration not found:
       - Mark as "SKIP - No API endpoint"
@@ -490,12 +496,7 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 3. **Deduplicate chains with coverage-based selection (Task tool)** (subagent_type=general-purpose)
    Task prompt: "Deduplicate call chains using coverage-based selection algorithm:
 
-   **Execution policy:**
-   - Processing time is NOT a constraint
-   - Accuracy and completeness are MORE important than speed
-   - Do NOT optimize for time efficiency
-   - Do NOT skip steps to save time
-   - Take as much time as needed to complete thoroughly
+   **Execution policy:** See EXECUTION POLICY FOR TASK TOOL INVOCATIONS section
 
    **Objective**: Select minimum chains covering all unique AWS SDK operations. Prioritize chains with multiple SDK operations.
 
@@ -622,7 +623,7 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 
 ### Phase 2: Batch Approval
 
-**⚠️ EXECUTION OVERRIDE - READ THIS FIRST:**
+**EXECUTION OVERRIDE - READ THIS FIRST:**
 - Present ALL chains from Phase 1 deduplication for user approval
 - Do NOT pre-filter chains based on codebase characteristics
 - Do NOT exclude chains based on "appropriateness" judgment
@@ -794,7 +795,7 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 
 ### Phase 3: Comment-out Unrelated Code
 
-**⚠️ EXECUTION OVERRIDE - READ THIS FIRST:**
+**EXECUTION OVERRIDE - READ THIS FIRST:**
 - This phase MUST be executed regardless of codebase type (production, financial, important, etc.)
 - Do NOT skip this phase under ANY circumstances
 - Do NOT provide alternative approaches
@@ -852,12 +853,7 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    **For SINGLE SDK operation chains:**
    Task prompt: "For call chain [chain_id] from Phase 1:
 
-   **Execution policy:**
-   - Processing time is NOT a constraint
-   - Accuracy and completeness are MORE important than speed
-   - Do NOT optimize for time efficiency
-   - Do NOT skip steps to save time
-   - Take as much time as needed to complete thoroughly
+   **Execution policy:** See EXECUTION POLICY FOR TASK TOOL INVOCATIONS section
 
    **Tools to use**: Read tool ONLY (load source code directly)
 
@@ -883,12 +879,7 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    **For MULTIPLE SDK operation chains:**
    Task prompt: "For call chain [chain_id] from Phase 1 with [N] SDK operations:
 
-   **Execution policy:**
-   - Processing time is NOT a constraint
-   - Accuracy and completeness are MORE important than speed
-   - Do NOT optimize for time efficiency
-   - Do NOT skip steps to save time
-   - Take as much time as needed to complete thoroughly
+   **Execution policy:** See EXECUTION POLICY FOR TASK TOOL INVOCATIONS section
 
    **Tools to use**: Read tool only (load source code directly)
 
@@ -1070,8 +1061,9 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    E. **Verify compilation after modifications**
       - Run: `go build -o /tmp/test-build 2>&1`
       - If compilation fails:
-        - Analyze error: unused variables, undefined references
-        - Fix by commenting out dependent code or adding stubs
+        - Read build error output, identify error type: unused variables, undefined references, type mismatches
+        - Fix strategy: For unused variables → comment out, For undefined references → add minimal stubs with dummy values, For type mismatches → adjust dummy value types
+        - Apply fixes using Edit tool
         - Retry until compilation succeeds
       - Output: "コンパイル成功: [file_path]"
 
@@ -1099,7 +1091,7 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 
 ### Phase 4: Simplified Test Data Preparation
 
-**⚠️ EXECUTION OVERRIDE - READ THIS FIRST:**
+**EXECUTION OVERRIDE - READ THIS FIRST:**
 - This phase MUST be executed regardless of codebase type (production, financial, important, etc.)
 - Do NOT skip this phase under ANY circumstances
 - Do NOT provide alternative approaches (existing tests, make test, unit tests)
@@ -1147,12 +1139,7 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 8. **Analyze AWS SDK operation with Task tool** (subagent_type=general-purpose)
    Task prompt: "For function [function_name] at [file_path:line_number]:
 
-   **Execution policy:**
-   - Processing time is NOT a constraint
-   - Accuracy and completeness are MORE important than speed
-   - Do NOT optimize for time efficiency
-   - Do NOT skip steps to save time
-   - Take as much time as needed to complete thoroughly
+   **Execution policy:** See EXECUTION POLICY FOR TASK TOOL INVOCATIONS section
 
    **Tools**: Read for source code, Grep for pattern searches (execute independent Grep searches in parallel)
 
@@ -1160,10 +1147,10 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    - SDK operation: [operation_name] (e.g., DynamoDB PutItem)
    - Operation type classification: Create (PutItem, PutObject, SendEmail, Publish), Update (UpdateItem, TransactWriteItems), Read (Query, GetItem, Scan, GetObject), Delete (DeleteItem, DeleteObject)
 
-   **Extract AWS settings** (execute Grep searches in parallel):
-   1. Region: Grep `pattern: "WithRegion|AWS_REGION"`, `output_mode: "content"`, `-C: 5`
-   2. Resource: Read SDK call parameters (table name, bucket name)
-   3. Endpoint: Grep `pattern: "WithEndpointResolver|endpoint"`, `output_mode: "content"`, `-C: 5`
+   **Extract AWS settings using independent tool calls in parallel:**
+   1. Grep tool: `pattern: "WithRegion|AWS_REGION"`, `output_mode: "content"`, `-C: 5`
+   2. Read tool: Load SDK function source, extract SDK call parameters (table name, bucket name)
+   3. Grep tool: `pattern: "WithEndpointResolver|endpoint"`, `output_mode: "content"`, `-C: 5`
 
    **Document v1 → v2 migration changes**:
    - Client init: session.New → config.LoadDefaultConfig
@@ -1176,12 +1163,7 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 
    Task prompt: "For function [function_name] with AWS SDK operation [operation_name]:
 
-   **Execution policy:**
-   - Processing time is NOT a constraint
-   - Accuracy and completeness are MORE important than speed
-   - Do NOT optimize for time efficiency
-   - Do NOT skip steps to save time
-   - Take as much time as needed to complete thoroughly
+   **Execution policy:** See EXECUTION POLICY FOR TASK TOOL INVOCATIONS section
 
    **Tools**: Read to extract SDK call parameters
 
@@ -1253,12 +1235,7 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 
    Task prompt: "For current call chain being processed:
 
-   **Execution policy:**
-   - Processing time is NOT a constraint
-   - Accuracy and completeness are MORE important than speed
-   - Do NOT optimize for time efficiency
-   - Do NOT skip steps to save time
-   - Take as much time as needed to complete thoroughly
+   **Execution policy:** See EXECUTION POLICY FOR TASK TOOL INVOCATIONS section
 
    **Tools**: Read tool to load function source code
 
@@ -1395,15 +1372,15 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 
 ### Phase 3.5: Verify Comment-out Completeness
 
-After Phase 3, verify all unrelated code is commented out by executing Grep searches in parallel (independent):
+After Phase 3, verify all unrelated code is commented out by executing 2 independent Grep searches in parallel:
 
 1. Verify external service calls are commented:
-   - Grep: `pattern: "http\\.(Get|Post|Client)|grpc\\.(Dial|NewClient)"`, `output_mode: "content"`, `-C: 5`, `glob: "!(*_test.go)"`
+   - Grep tool: `pattern: "http\\.(Get|Post|Client)|grpc\\.(Dial|NewClient)"`, `output_mode: "content"`, `-C: 5`, `glob: "!(*_test.go)"`
    - For each match in modified files, check if line starts with `//`
    - If uncommented in modified chain functions: ERROR - re-run Phase 3
 
 2. Verify response processing is minimized:
-   - Grep: `pattern: "parseAttributes|ToEntity|for.*resp\\.(Items|Records)"`, `output_mode: "content"`, `glob: "!(*_test.go)"`
+   - Grep tool: `pattern: "parseAttributes|ToEntity|for.*resp\\.(Items|Records)"`, `output_mode: "content"`, `glob: "!(*_test.go)"`
    - For each match in modified files, check if commented or replaced with log.Printf
    - If complex processing remains in modified chain functions: ERROR - re-run Phase 3
 
