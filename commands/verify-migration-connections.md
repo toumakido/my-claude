@@ -294,8 +294,8 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    1. Mandatory minimum: Process at least N chains (N = min(total chains, 3))
    2. Priority order when time-constrained:
       - Chains with multiple SDK operations (highest priority)
-      - Chains with Read/Delete operations (need Pre-insert)
-      - Chains with single Write operations (lowest priority)
+      - Chains with Update/Read/Delete operations (need Pre-insert)
+      - Chains with single Create operations (lowest priority)
 
    3. Skip criteria (only apply after meeting mandatory minimum):
       - Chain has 6+ external dependencies
@@ -501,7 +501,11 @@ Keep only SDK-related code, comment out everything else:
 
    **Context from Phase 1**:
    - SDK operation: [operation_name from Phase 1] (e.g., DynamoDB PutItem)
-   - Operation type: [Read/Write/Delete from operation name]
+   - Operation type: Classify from operation name:
+     - Create: PutItem, PutObject, SendEmail, Publish
+     - Update: UpdateItem, TransactWriteItems
+     - Read: Query, GetItem, Scan, GetObject
+     - Delete: DeleteItem, DeleteObject
    - Function location: [file:line from Phase 1]
 
    1. Extract AWS settings from [function_name] using Read:
@@ -524,20 +528,25 @@ Keep only SDK-related code, comment out everything else:
 
    **Context from Phase 1**:
    - Operations in chain: [list from Phase 1] (e.g., [Query, UpdateItem, TransactWriteItems])
-   - Operation types: [Read/Write/Delete for each operation]
+   - Operation types: Classify each operation:
+     - Create: PutItem, PutObject, SendEmail, Publish
+     - Update: UpdateItem, TransactWriteItems
+     - Read: Query, GetItem, Scan, GetObject
+     - Delete: DeleteItem, DeleteObject
 
    **Pre-insert requirement** (based on Phase 1 operation types):
-   - ANY Read operation → Generate Pre-insert for EACH Read
-   - ANY Delete operation → Generate Pre-insert for EACH Delete target
-   - Only Write operations → No Pre-insert needed
+   - Create operations → No Pre-insert needed (creates new data)
+   - Update operations → Generate Pre-insert for EACH Update (requires existing data)
+   - Read operations → Generate Pre-insert for EACH Read (requires existing data)
+   - Delete operations → Generate Pre-insert for EACH Delete (requires existing data)
 
    Example:
    ```
-   Operations from Phase 1: [Query (Read), UpdateItem (Write), TransactWriteItems (Write)]
-   Result: Generate Pre-insert for Query operation only
+   Operations from Phase 1: [Query (Read), UpdateItem (Update), PutItem (Create)]
+   Result: Generate Pre-insert for Query and UpdateItem operations
    ```
 
-   If operation type is Read or Delete (from Phase 1):
+   If operation type is Update, Read, or Delete (from Phase 1):
    1. Use Read to identify AWS SDK call parameters (table name, key, bucket, etc.)
    2. Generate 1-2 minimal test records matching those parameters
    3. Use correct Go types (pointer allocation with `aws.String`, `aws.Int64`, etc.)
@@ -548,12 +557,12 @@ Keep only SDK-related code, comment out everything else:
    - Insertion line number (line before AWS SDK call)
    - Required imports (aws SDK packages)
 
-   If operation type is Write (from Phase 1):
-   - Return: \"No Pre-insert needed for Write operation\""
+   If operation type is Create (from Phase 1):
+   - Return: \"No Pre-insert needed for Create operation\""
 
 10. **Apply Pre-insert code with Edit tool**
 
-   If operation type is Read or Delete (from Phase 1):
+   If operation type is Update, Read, or Delete (from Phase 1):
 
    A. Insert Pre-insert code from step 9:
       - Use Edit tool to insert before AWS SDK operation
@@ -577,15 +586,15 @@ Keep only SDK-related code, comment out everything else:
       - コンパイル: 成功
       ```
 
-   D. **Verify Pre-insert code for all Read/Delete operations** (verification step)
+   D. **Verify Pre-insert code for all Update/Read/Delete operations** (verification step)
 
    Run verification for the processed chain:
 
-   1. Search for Read/Delete operations using Grep:
-      - Pattern: `client\.(Query|GetItem|GetObject|Scan|DeleteItem|DeleteObject)`
+   1. Search for Update/Read/Delete operations using Grep:
+      - Pattern: `client\.(UpdateItem|TransactWriteItems|Query|GetItem|GetObject|Scan|DeleteItem|DeleteObject)`
       - In files: processed chain files only
 
-   2. For each Read/Delete operation found:
+   2. For each Update/Read/Delete operation found:
       - Check lines before operation (within 20 lines)
       - Search for Pre-insert code patterns:
         - Comment: `// Pre-insert test data`
@@ -602,6 +611,7 @@ Keep only SDK-related code, comment out everything else:
    Example output:
    ```
    検証実行中: Pre-insertコードの生成チェック
+   - UpdateItem at repository.go:100 - Pre-insert: FOUND
    - Query at repository.go:123 - Pre-insert: NOT FOUND
    - GetItem at gateway.go:234 - Pre-insert: FOUND
    ERROR: Phase 4 incomplete - 1 operation missing Pre-insert code
@@ -620,8 +630,9 @@ Keep only SDK-related code, comment out everything else:
     === 処理完了サマリー ===
 
     処理したSDK関数: N個
+    - Create操作: A個
+    - Update操作: B個 (Pre-insertコード追加済み)
     - Read操作: X個 (Pre-insertコード追加済み)
-    - Write操作: Y個
     - Delete操作: Z個 (Pre-insertコード追加済み)
     - 複数SDK使用: W個
 
@@ -631,8 +642,8 @@ Keep only SDK-related code, comment out everything else:
     ...
 
     書き換えたファイル: (Phase 4で処理)
-    - [file_path_1]
-    - [file_path_2]
+    - [file_path_1] (Pre-insert追加)
+    - [file_path_2] (Pre-insert追加)
     ...
 
     コンパイル: 成功P個 / 失敗Q個
@@ -759,8 +770,9 @@ Keep only SDK-related code, comment out everything else:
 === バッチ処理する組み合わせ ===
 
 合計SDK関数数: 5個
+- Create操作: 3個
+- Update操作: 0個
 - Read操作: 1個
-- Write操作: 3個
 - Delete操作: 0個
 - 複数SDK使用: 2個
 
@@ -787,7 +799,7 @@ Keep only SDK-related code, comment out everything else:
 === テストデータ準備完了 (i/N) ===
 
 関数: [file_path:line_number] | [function_name]
-- AWS操作: [Read/Write/Delete] ([operation_name])
+- AWS操作: [Create/Update/Read/Delete] ([operation_name])
 - Pre-insertコード: 追加済み / 不要
 - コンパイル: 成功
 ```
@@ -797,8 +809,9 @@ Keep only SDK-related code, comment out everything else:
 === 処理完了サマリー ===
 
 処理したSDK関数: 5個
+- Create操作: 3個
+- Update操作: 0個
 - Read操作: 1個 (Pre-insertコード追加済み)
-- Write操作: 3個
 - Delete操作: 0個
 - 複数SDK使用: 2個
 
@@ -865,7 +878,7 @@ Detailed instructions are in Process section above. Key requirements:
 ### Key Process Steps
 - **Deduplication** (step 3): Group by AWS_service + SDK_operation, ignore parameters. Select shortest chain from each group.
 - **Comment-out unrelated code** (step 6): Identify code blocks unrelated to target AWS SDK operation, comment out with reason, verify compilation.
-- **Simplified test data generation** (step 9): Skip detailed analysis, generate minimal test data (1-2 records) with correct Go types for Read/Delete operations only.
+- **Simplified test data generation** (step 9): Skip detailed analysis, generate minimal test data (1-2 records) with correct Go types for Update/Read/Delete operations.
 - **Apply Pre-insert code** (step 10): Insert test data preparation code, verify compilation, automatically proceed to next chain.
 
 ### Output Guidelines
