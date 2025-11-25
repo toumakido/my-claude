@@ -424,9 +424,19 @@ Keep only SDK-related code, comment out everything else:
    For each chain in optimal combination (index i from 1 to N):
 
    A. Display progress:
+
+   For single SDK operation:
    ```
    === コメントアウト処理中 (i/N) ===
-   関数: [file_path:line_number] | [function_name] | [operations]
+   Chain: [entry_type] [identifier]
+   SDK operation: [Service] [Operation]
+   ```
+
+   For multiple SDK operations:
+   ```
+   === コメントアウト処理中 (i/N) ===
+   Chain: [entry_type] [identifier] [★ Multiple SDK: M operations]
+   SDK operations: [N]-A [Operation1], [N]-B [Operation2], [N]-C [Operation3]
    ```
 
    B. **Identify SDK-related code and unrelated code** (Task tool: subagent_type=general-purpose)
@@ -441,31 +451,75 @@ Keep only SDK-related code, comment out everything else:
    - Business logic unrelated to SDK
    - Data preparation from non-AWS sources
 
-   Task prompt: "For call chain [entry_point → ... → target_function] with AWS SDK operations [operation_names]:
+   **Analysis approach differs by SDK operation count:**
+
+   **For SINGLE SDK operation chains:**
+   Task prompt: "For call chain [chain_id] from Phase 1:
 
    **Tools to use**: Read tool for loading source code, no Grep/Glob needed
 
-   **Context from Phase 1**:
-   - Complete call chain (copy from Phase 1 output with ALL functions listed)
-   - SDK operation: [operation_name]
+   **Context from Phase 1** (copy complete chain):
+   ```
+   Entry: [type] [identifier]
+   → [file:line] EntryFunction
+   → [file:line] IntermediateFunction
+   → [file:line] SDKFunction
+   → [Service] [Operation]
+   ```
 
-   **Functions to analyze** (MUST analyze ALL, not just SDK function):
-
-   Function 1: [entry_function] at [file:line]
-   Function 2: [intermediate_function_1] at [file:line]
-   Function 3: [intermediate_function_2] at [file:line]
-   Function 4: [sdk_function] at [file:line]
+   **Functions to analyze** (MUST analyze ALL):
+   Function 1: [file:line] EntryFunction (entry)
+   Function 2: [file:line] IntermediateFunction (intermediate)
+   Function 3: [file:line] SDKFunction (sdk)
 
    For EACH function above:
    Step 1: Load function source code
    Step 2: Identify SDK-related code (KEEP)
    Step 3: Identify unrelated code (COMMENT)
 
-   Common unrelated code in intermediate layers:
-   - External HTTP/gRPC calls (e.g., externalServiceRepo.GetEntitiesByID)
-   - Validation not related to SDK input
-   - Data enrichment from non-AWS sources
-   - Concurrent processing logic (goroutines, waitgroups) unrelated to SDK call
+   **For MULTIPLE SDK operation chains (EFFICIENT approach):**
+   Task prompt: "For call chain [chain_id] from Phase 1 with [N] SDK operations:
+
+   **Tools to use**: Read tool for loading source code, no Grep/Glob needed
+
+   **Context from Phase 1** (copy hierarchical structure):
+   ```
+   Entry → Intermediate layers:
+   Entry: [type] [identifier]
+   → [file:line] EntryFunction
+   → [file:line] IntermediateFunction
+
+   SDK Functions (Phase 3 targets):
+   [N]-A. [file:line] SDKFunction1
+          Operation: [Service] [Operation1]
+
+   [N]-B. [file:line] SDKFunction2
+          Operation: [Service] [Operation2]
+   ```
+
+   **EFFICIENT analysis procedure:**
+
+   Step 1: Analyze Entry/Intermediate layers ONCE (shared analysis)
+   For each function in Entry → Intermediate layers:
+   - Load function source code
+   - Identify code unrelated to ANY SDK operation
+   - Common unrelated code:
+     - External HTTP/gRPC calls ← MUST BE COMMENTED OUT
+     - Validation not related to SDK input
+     - Data enrichment from non-AWS sources
+     - Concurrent processing logic unrelated to SDK calls
+
+   Step 2: Analyze EACH SDK function individually
+   For each SDK function ([N]-A, [N]-B, [N]-C):
+   - Load SDK function source code
+   - Identify code specific to THIS SDK operation
+   - Identify code unrelated to THIS specific operation
+
+   Common unrelated code in SDK functions:
+   - Response parsing (parseAttributes, for-loops over resp.Items)
+   - Entity transformation (ToEntity)
+   - Pagination logic
+   - Detailed error wrapping
 
    **Objective**: Classify code into SDK-related (KEEP) and unrelated (COMMENT).
 
@@ -525,25 +579,58 @@ Keep only SDK-related code, comment out everything else:
    metrics.Increment("calls")
    ```
 
-   Return format:
+   Return format for SINGLE SDK operation:
    ```
-   Call chain: [entry] → [intermediate] → [target]
-   SDK operations: [list]
+   Chain [N]: [entry_type] [identifier]
+   SDK operation: [Service] [Operation]
 
-   Function 1: [entry_function] at [file:line]
+   Function 1: [entry_function] at [file:line] (entry)
    SDK-related code (KEEP):
    - Lines X-Y: [description]
 
    Unrelated code (COMMENT):
    - Lines A-B: [description]
-   - Lines C-D: [description]
 
-   Function 2: [intermediate_function] at [file:line]
+   Function 2: [intermediate_function] at [file:line] (intermediate)
+   Unrelated code (COMMENT):
+   - Lines P-Q: [description]
+
+   Function 3: [sdk_function] at [file:line] (sdk)
    SDK-related code (KEEP):
    - Lines M-N: [description]
 
    Unrelated code (COMMENT):
-   - Lines P-Q: [description]
+   - Lines S-T: [description]
+   ```
+
+   Return format for MULTIPLE SDK operations:
+   ```
+   Chain [N]: [entry_type] [identifier] [★ Multiple SDK: M operations]
+
+   Entry/Intermediate layers (analyzed once):
+   Function 1: [entry_function] at [file:line] (entry)
+   Unrelated code (COMMENT):
+   - Lines A-B: [description]
+
+   Function 2: [intermediate_function] at [file:line] (intermediate)
+   Unrelated code (COMMENT):
+   - Lines C-D: External service call
+   - Lines E-F: Validation logic
+
+   SDK Functions (analyzed individually):
+   [N]-A. [sdk_function_1] at [file:line]
+   Operation: [Service] [Operation1]
+   SDK-related code (KEEP):
+   - Lines X-Y: [description]
+   Unrelated code (COMMENT):
+   - Lines P-Q: Response parsing
+
+   [N]-B. [sdk_function_2] at [file:line]
+   Operation: [Service] [Operation2]
+   SDK-related code (KEEP):
+   - Lines M-N: [description]
+   Unrelated code (COMMENT):
+   - Lines S-T: Entity transformation
    ```"
 
    C. **Apply comment-out modifications with Edit tool**
@@ -611,9 +698,23 @@ Keep only SDK-related code, comment out everything else:
       - Output: "コンパイル成功: [file_path]"
 
    F. Display completion and proceed to next chain:
+
+   For single SDK operation:
    ```
    完了 (i/N): コメントアウト処理
-   - 処理した関数数: X個
+   Chain: [entry_type] [identifier]
+   - Entry/Intermediate関数: X個
+   - SDK関数: 1個
+   - コメントアウトしたブロック数: Y個
+   - コンパイル: 成功
+   ```
+
+   For multiple SDK operations:
+   ```
+   完了 (i/N): コメントアウト処理
+   Chain: [entry_type] [identifier] [★ Multiple SDK: M operations]
+   - Entry/Intermediate関数: X個 (1回のみ分析)
+   - SDK関数: M個 (個別に分析)
    - コメントアウトしたブロック数: Y個
    - コンパイル: 成功
    ```
@@ -622,12 +723,28 @@ Keep only SDK-related code, comment out everything else:
 
 7. **Process all chains in optimal combination sequentially**
 
+   **Processing strategy:**
+   - Single SDK operation: Process chain once
+   - Multiple SDK operations: Process EACH SDK function separately (e.g., chain 2 with 3 SDK operations = 3 separate processing runs for 2-A, 2-B, 2-C)
+
    For each chain in optimal combination (index i from 1 to N):
 
    A. Display progress:
+
+   For single SDK operation:
    ```
    === テストデータ準備中 (i/N) ===
-   関数: [file_path:line_number] | [function_name] | [operations]
+   Chain: [entry_type] [identifier]
+   SDK function: [file:line] [function_name]
+   Operation: [Service] [Operation]
+   ```
+
+   For multiple SDK operations (each SDK function processed separately):
+   ```
+   === テストデータ準備中 (i/N, SDK function [N]-A/B/C) ===
+   Chain: [entry_type] [identifier] [★ Multiple SDK]
+   SDK function: [N]-A. [file:line] [function_name]
+   Operation: [Service] [Operation]
    ```
 
    B. Execute steps 8-10 for current chain
@@ -717,9 +834,22 @@ Keep only SDK-related code, comment out everything else:
         - Repeat until compilation succeeds
       - Output: "コンパイル成功: [file_path]"
 
-   C. Display completion and proceed to next chain:
+   C. Display completion and proceed to next SDK function/chain:
+
+      For single SDK operation:
       ```
       完了 (i/N): テストデータ準備
+      Chain: [entry_type] [identifier]
+      SDK function: [file:line] [function_name]
+      - Pre-insertコード: 追加済み / 不要
+      - コンパイル: 成功
+      ```
+
+      For multiple SDK operations (per SDK function):
+      ```
+      完了 (i/N, SDK function [N]-A): テストデータ準備
+      Chain: [entry_type] [identifier] [★ Multiple SDK]
+      SDK function: [N]-A. [file:line] [function_name]
       - Pre-insertコード: 追加済み / 不要
       - コンパイル: 成功
       ```
