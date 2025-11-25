@@ -113,23 +113,42 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 
    **Step 5: Format output**
 
-   Call chain format:
+   CRITICAL: List EVERY function in the call chain with file:line, not just SDK function.
+   Omitting intermediate functions will cause Phase 3 to miss external service calls and business logic.
+
+   Call chain format (ALL functions must be listed):
    ```
-   [Entry Point]
-   → [Handler/Task file:line] HandlerMethod
-   → [Service file:line] ServiceMethod
-   → [Target file:line] TargetFunction
+   Entry: [type] [identifier]
+   → [file:line] EntryFunction
+   → [file:line] IntermediateFunction1
+   → [file:line] IntermediateFunction2
+   → [file:line] SDKFunction
    → AWS SDK v2 API (Operation)
    ```
 
-   Example:
+   Example (complete chain with all functions):
    ```
-   POST /v1/entities
-   → internal/api/handler/v1/entity_handler.go:45 PostEntities
-   → internal/service/entity_service.go:123 CreateEntity
-   → internal/repository/entity_repo.go:78 SaveEntity
-   → DynamoDB PutItem
+   Entry: Task batch_processor
+   → cmd/batch_processor/main.go:136 runTask
+   → internal/tasks/batch_processor.go:40 (*Worker).ProcessBatch
+   → internal/tasks/batch_processor.go:134 (*Worker).ProcessTransfer
+   → internal/service/counter.go:60 (*Counter).GetNextValue
+   → DynamoDB UpdateItem
    ```
+
+   BAD example (incomplete, missing intermediate functions):
+   ```
+   Entry: Task batch_processor
+   → cmd/batch_processor/main.go runTask
+   → internal/service/counter.go:60 GetNextValue
+   → DynamoDB UpdateItem
+   ```
+
+   **Validation**: After Task tool completes, verify output includes:
+   - Entry function with file:line
+   - ALL intermediate functions with file:line
+   - SDK function with file:line
+   - If any function lacks file:line, re-run Step 2 with explicit instruction to trace ALL functions
 
    If entry point not verified (marked in Step 2):
    - Exclude from call chain list immediately
@@ -286,11 +305,27 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 
 ### Phase 3: Comment-out Unrelated Code
 
+**Objective**: Minimize code to focus ONLY on AWS SDK connection verification.
+Keep only: SDK client init, SDK input construction, SDK call, minimal error check.
+Comment out: Response processing, business logic, external calls, detailed error handling.
+
+**What to verify in connection testing:**
+- SDK call succeeds (no error)
+- Connects to correct resource (table name, bucket name)
+- X-Ray trace is recorded
+
+**What NOT to verify (comment out these):**
+- Response data accuracy
+- Business logic correctness
+- Entity transformation correctness
+
 **Approach**:
 Keep only SDK-related code, comment out everything else:
 1. Identify SDK operation and its input variables (e.g., `dynamoDB.PutItem(ctx, &input)`)
 2. Identify SDK-related code: code that builds SDK input
 3. Comment out unrelated code: code NOT used by SDK operation
+4. Comment out response processing beyond connection verification
+5. Replace detailed error handling with simple logging
 
 6. **Comment out unrelated code in call chain functions**
 
@@ -303,41 +338,73 @@ Keep only SDK-related code, comment out everything else:
    ```
 
    B. **Identify SDK-related code and unrelated code** (Task tool: subagent_type=general-purpose)
+
+   CRITICAL: Analyze ALL functions in call chain from Phase 1, including:
+   1. Entry function (main.go, task entry)
+   2. ALL intermediate functions (handler, usecase, task worker methods)
+   3. SDK operation function (repository, gateway)
+
+   DO NOT analyze only the SDK function. Intermediate layers often contain:
+   - External service calls (HTTP/gRPC) ← MUST BE COMMENTED OUT
+   - Business logic unrelated to SDK
+   - Data preparation from non-AWS sources
+
    Task prompt: "For call chain [entry_point → ... → target_function] with AWS SDK operations [operation_names]:
 
    **Tools to use**: Read tool for loading source code, no Grep/Glob needed
 
    **Context from Phase 1**:
-   - Call chain: [chain from Phase 1]
-   - SDK operation: [operation_name from Phase 1] (e.g., DynamoDB PutItem)
-   - Functions: [file:line for each function in chain]
+   - Complete call chain (copy from Phase 1 output with ALL functions listed)
+   - SDK operation: [operation_name]
+
+   **Functions to analyze** (MUST analyze ALL, not just SDK function):
+
+   Function 1: [entry_function] at [file:line]
+   Function 2: [intermediate_function_1] at [file:line]
+   Function 3: [intermediate_function_2] at [file:line]
+   Function 4: [sdk_function] at [file:line]
+
+   For EACH function above:
+   Step 1: Load function source code
+   Step 2: Identify SDK-related code (KEEP)
+   Step 3: Identify unrelated code (COMMENT)
+
+   Common unrelated code in intermediate layers:
+   - External HTTP/gRPC calls (e.g., externalServiceRepo.GetEntitiesByID)
+   - Validation not related to SDK input
+   - Data enrichment from non-AWS sources
+   - Concurrent processing logic (goroutines, waitgroups) unrelated to SDK call
 
    **Objective**: Classify code into SDK-related (KEEP) and unrelated (COMMENT).
 
    **Classification criteria**:
 
-   SDK-related code (KEEP) - Code that directly contributes to SDK operation input:
+   SDK-related code (KEEP) - Code that directly contributes to SDK operation:
    1. SDK client initialization (e.g., `dynamodb.New()`, `s3.NewFromConfig()`)
    2. SDK input struct construction (e.g., `&dynamodb.PutItemInput{...}`)
-   3. Data transformation for SDK input (e.g., `buildItem()`, `marshalMap()`)
-   4. Variables/parameters used in SDK input fields
-   5. Context handling for SDK calls (e.g., `ctx` parameter)
-   6. Error handling for SDK responses (e.g., `if err != nil` after SDK call)
+   3. Data transformation for SDK input (variables used in input fields)
+   4. Context handling for SDK calls (e.g., `ctx` parameter)
+   5. MINIMAL error check (if err != nil { log; return })
+   6. SUCCESS confirmation logging (log.Printf("Operation succeeded"))
 
-   Unrelated code (COMMENT) - Code NOT used by SDK operation:
-   1. Logging statements (e.g., `logger.Info()`, `log.Printf()`)
-   2. Metrics/monitoring (e.g., `metrics.Increment()`)
-   3. External service calls (e.g., `userRepo.Get()`, HTTP requests)
+   DO NOT KEEP (must comment out):
+   - Detailed error wrapping (apperrors.Wrap, utils.GetFunctionName)
+   - Response parsing (parseAttributes, for-loops over resp.Items)
+   - Entity transformation (ToEntity, domain model conversion)
+   - Pagination logic (ExclusiveStartKey handling)
+   - Business logic using response data
+
+   Unrelated code (COMMENT):
+   1. Logging statements
+   2. Metrics/monitoring
+   3. External service calls
    4. Validation logic not related to SDK input
    5. Business logic after SDK operation completes
-   6. Cache operations (e.g., `cache.Set()`, `cache.Get()`)
-
-   **For EACH function in call chain** (entry → intermediate → target):
-
-   Step 1: Load function source code
-   Use Read tool:
-   - File: [function file path from Phase 1]
-   - Read entire function body
+   6. Cache operations
+   7. Response parsing into domain entities (NEW)
+   8. Detailed error wrapping (keep only basic error check) (NEW)
+   9. Entity transformation (parseAttributes, ToEntity, etc.) (NEW)
+   10. Pagination loops (NEW)
 
    Step 2: Identify SDK-related code (KEEP)
    - All code that defines, constructs, or provides data to SDK operation
@@ -592,7 +659,37 @@ Keep only SDK-related code, comment out everything else:
 
 11. **Automatic progression**
    - If i < N: continue to next chain (repeat from step 7.A)
-   - If i = N: proceed to Phase 5
+   - If i = N: proceed to Phase 3.5
+
+### Phase 3.5: Verify Comment-out Completeness
+
+After completing Phase 3 for all chains, verify:
+
+1. Check entry/intermediate functions were analyzed:
+   - Use Grep: `pattern: "Commented out for testing"`, `glob: "cmd/**/*.go"`, `output_mode: "files_with_matches"`
+   - Use Grep: `pattern: "Commented out for testing"`, `glob: "internal/tasks/**/*.go"`, `output_mode: "files_with_matches"`
+   - If no matches: WARNING - intermediate functions may not have been analyzed
+
+2. Verify external service calls are commented:
+   - Use Grep: `pattern: "http\\.(Get|Post|Client)|grpc\\.(Dial|NewClient)"`, `output_mode: "content"`, `-C: 5`, `glob: "!(*_test.go)"`
+   - For each match in analyzed files: Check if preceded by "Commented out for testing"
+   - If uncommented external calls found: ERROR - re-run Phase 3
+
+3. Verify response processing is minimal:
+   - Use Grep: `pattern: "parseAttributes|ToEntity|for.*resp\\.(Items|Records)"`, `output_mode: "content"`, `glob: "!(*_test.go)"`
+   - For each match: Check if commented out or replaced with log.Printf
+   - If complex processing remains: ERROR - re-run Phase 3
+
+Output:
+```
+=== Phase 3検証結果 ===
+
+✓ Entry/intermediate functions analyzed: 3 files
+✓ External service calls commented: 2箇所
+✓ Response processing minimized: 4箇所
+
+全てのコードが接続確認に最適化されました
+```
 
 ### Phase 5: Final Summary
 
