@@ -113,23 +113,80 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 
    **Step 5: Format output**
 
-   Call chain format:
+   CRITICAL: List EVERY function in the call chain with file:line, not just SDK function.
+   Omitting intermediate functions will cause Phase 3 to miss external service calls and business logic.
+
+   **Format for single SDK operation:**
    ```
-   [Entry Point]
-   → [Handler/Task file:line] HandlerMethod
-   → [Service file:line] ServiceMethod
-   → [Target file:line] TargetFunction
+   Entry: [type] [identifier]
+   → [file:line] EntryFunction
+   → [file:line] IntermediateFunction1
+   → [file:line] IntermediateFunction2
+   → [file:line] SDKFunction
    → AWS SDK v2 API (Operation)
    ```
 
-   Example:
+   **Format for multiple SDK operations (hierarchical structure):**
    ```
-   POST /v1/entities
-   → internal/api/handler/v1/entity_handler.go:45 PostEntities
-   → internal/service/entity_service.go:123 CreateEntity
-   → internal/repository/entity_repo.go:78 SaveEntity
-   → DynamoDB PutItem
+   Chain: [entry_type] [identifier] [★ Multiple SDK: N operations]
+
+   Entry → Intermediate layers:
+   Entry: [type] [identifier]
+   → [file:line] EntryFunction
+   → [file:line] IntermediateFunction1
+   → [file:line] IntermediateFunction2
+
+   SDK Functions (Phase 3 targets):
+   [ChainID]-A. [file:line] SDKFunction1
+        Operation: [Service] [Operation1]
+
+   [ChainID]-B. [file:line] SDKFunction2
+        Operation: [Service] [Operation2]
    ```
+
+   Example (single SDK operation):
+   ```
+   Entry: Task task_name
+   → cmd/task_name/main.go:100 main
+   → internal/tasks/task_worker.go:50 Execute
+   → internal/service/service_name.go:80 ProcessData
+   → DynamoDB UpdateItem
+   ```
+
+   Example (multiple SDK operations):
+   ```
+   Chain: Task task_name [★ Multiple SDK: 3 operations]
+
+   Entry → Intermediate layers:
+   Entry: Task task_name
+   → cmd/task_name/main.go:100 main
+   → internal/tasks/task_worker.go:50 Execute
+   → internal/service/service_name.go:80 ProcessData
+
+   SDK Functions (Phase 3 targets):
+   1-A. internal/service/service_name.go:120 createRecord
+        Operation: DynamoDB PutItem
+
+   1-B. internal/service/service_name.go:150 updateRecord
+        Operation: DynamoDB UpdateItem
+
+   1-C. internal/service/service_name.go:180 processTransaction
+        Operation: DynamoDB TransactWriteItems
+   ```
+
+   BAD example (incomplete, missing intermediate functions):
+   ```
+   Entry: Task task_name
+   → cmd/task_name/main.go main
+   → internal/service/service_name.go:80 ProcessData
+   → DynamoDB UpdateItem
+   ```
+
+   **Validation**: After Task tool completes, verify output includes:
+   - Entry function with file:line
+   - ALL intermediate functions with file:line
+   - ALL SDK functions with file:line (for multiple SDK operations, list separately under "SDK Functions")
+   - If any function lacks file:line, re-run Step 2 with explicit instruction to trace ALL functions
 
    If entry point not verified (marked in Step 2):
    - Exclude from call chain list immediately
@@ -195,18 +252,72 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 4. **Format and cache optimal combination**
    Store Task result in variable for batch processing.
 
-   Output format (simple chain format):
+   **Output format for single SDK operation:**
    ```
-   [N]. [file:line] | [function] | [operations] [markers]
-   Chain: [entry point] → [intermediate layers] → AWS SDK API ([SDK method count], [hop count])
-   Active callers: [count]箇所 ([locations])
+   [N]. Chain: [entry_type] [identifier]
+
+   Entry: [type] [identifier]
+   → [file:line] EntryFunction
+   → [file:line] IntermediateFunction
+   → [file:line] SDKFunction
+   → [Service] [Operation]
+
+   (1 SDK operation, [hop_count] hops) Active callers: [count]箇所
    ```
 
-   Example:
+   **Output format for multiple SDK operations:**
    ```
-   1. internal/service/datastore.go:306 | CreateRecord | DynamoDB TransactWriteItems [+3 other operations]
-   Chain: POST /v1/records → handler.CreateRecords → service.CreateRecord → DynamoDB TransactWriteItems (3 SDK methods, 4 hops)
-   Active callers: 5箇所 (handlers)
+   [N]. Chain: [entry_type] [identifier] [★ Multiple SDK: N operations]
+
+   Entry → Intermediate layers:
+   Entry: [type] [identifier]
+   → [file:line] EntryFunction
+   → [file:line] IntermediateFunction
+
+   SDK Functions (Phase 3 targets):
+   [N]-A. [file:line] SDKFunction1
+          Operation: [Service] [Operation1]
+
+   [N]-B. [file:line] SDKFunction2
+          Operation: [Service] [Operation2]
+
+   ([N] SDK operations, [hop_count] hops) Active callers: [count]箇所
+   ```
+
+   Example (single SDK operation):
+   ```
+   1. Chain: Task task_name
+
+   Entry: Task task_name
+   → cmd/task_name/main.go:100 main
+   → internal/tasks/task_worker.go:50 Execute
+   → internal/service/service_name.go:80 ProcessData
+   → DynamoDB UpdateItem
+
+   (1 SDK operation, 4 hops) Active callers: 3箇所
+   ```
+
+   Example (multiple SDK operations):
+   ```
+   2. Chain: Task task_name [★ Multiple SDK: 3 operations]
+
+   Entry → Intermediate layers:
+   Entry: Task task_name
+   → cmd/task_name/main.go:100 main
+   → internal/tasks/task_worker.go:50 Execute
+   → internal/service/service_name.go:80 ProcessData
+
+   SDK Functions (Phase 3 targets):
+   2-A. internal/service/service_name.go:120 createRecord
+        Operation: DynamoDB PutItem
+
+   2-B. internal/service/service_name.go:150 updateRecord
+        Operation: DynamoDB UpdateItem
+
+   2-C. internal/service/service_name.go:180 processTransaction
+        Operation: DynamoDB TransactWriteItems
+
+   (3 SDK operations, 5 hops) Active callers: 2箇所
    ```
 
    DO NOT output verbose format with full code signatures unless explicitly requested.
@@ -286,58 +397,160 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 
 ### Phase 3: Comment-out Unrelated Code
 
+**Objective**: Minimize code to focus ONLY on AWS SDK connection verification.
+Keep only: SDK client init, SDK input construction, SDK call, minimal error check.
+Comment out: Response processing, business logic, external calls, detailed error handling.
+
+**What to verify in connection testing:**
+- SDK call succeeds (no error)
+- Connects to correct resource (table name, bucket name)
+- X-Ray trace is recorded
+
+**What NOT to verify (comment out these):**
+- Response data accuracy
+- Business logic correctness
+- Entity transformation correctness
+
 **Approach**:
 Keep only SDK-related code, comment out everything else:
 1. Identify SDK operation and its input variables (e.g., `dynamoDB.PutItem(ctx, &input)`)
 2. Identify SDK-related code: code that builds SDK input
 3. Comment out unrelated code: code NOT used by SDK operation
+4. Comment out response processing beyond connection verification
+5. Replace detailed error handling with simple logging
 
 6. **Comment out unrelated code in call chain functions**
 
    For each chain in optimal combination (index i from 1 to N):
 
    A. Display progress:
+
+   For single SDK operation:
    ```
    === コメントアウト処理中 (i/N) ===
-   関数: [file_path:line_number] | [function_name] | [operations]
+   Chain: [entry_type] [identifier]
+   SDK operation: [Service] [Operation]
+   ```
+
+   For multiple SDK operations:
+   ```
+   === コメントアウト処理中 (i/N) ===
+   Chain: [entry_type] [identifier] [★ Multiple SDK: M operations]
+   SDK operations: [N]-A [Operation1], [N]-B [Operation2], [N]-C [Operation3]
    ```
 
    B. **Identify SDK-related code and unrelated code** (Task tool: subagent_type=general-purpose)
-   Task prompt: "For call chain [entry_point → ... → target_function] with AWS SDK operations [operation_names]:
+
+   CRITICAL: Analyze ALL functions in call chain from Phase 1, including:
+   1. Entry function (main.go, task entry)
+   2. ALL intermediate functions (handler, usecase, task worker methods)
+   3. SDK operation function (repository, gateway)
+
+   DO NOT analyze only the SDK function. Intermediate layers often contain:
+   - External service calls (HTTP/gRPC) ← MUST BE COMMENTED OUT
+   - Business logic unrelated to SDK
+   - Data preparation from non-AWS sources
+
+   **Analysis approach differs by SDK operation count:**
+
+   **For SINGLE SDK operation chains:**
+   Task prompt: "For call chain [chain_id] from Phase 1:
 
    **Tools to use**: Read tool for loading source code, no Grep/Glob needed
 
-   **Context from Phase 1**:
-   - Call chain: [chain from Phase 1]
-   - SDK operation: [operation_name from Phase 1] (e.g., DynamoDB PutItem)
-   - Functions: [file:line for each function in chain]
+   **Context from Phase 1** (copy complete chain):
+   ```
+   Entry: [type] [identifier]
+   → [file:line] EntryFunction
+   → [file:line] IntermediateFunction
+   → [file:line] SDKFunction
+   → [Service] [Operation]
+   ```
+
+   **Functions to analyze** (MUST analyze ALL):
+   Function 1: [file:line] EntryFunction (entry)
+   Function 2: [file:line] IntermediateFunction (intermediate)
+   Function 3: [file:line] SDKFunction (sdk)
+
+   For EACH function above:
+   Step 1: Load function source code
+   Step 2: Identify SDK-related code (KEEP)
+   Step 3: Identify unrelated code (COMMENT)
+
+   **For MULTIPLE SDK operation chains (EFFICIENT approach):**
+   Task prompt: "For call chain [chain_id] from Phase 1 with [N] SDK operations:
+
+   **Tools to use**: Read tool for loading source code, no Grep/Glob needed
+
+   **Context from Phase 1** (copy hierarchical structure):
+   ```
+   Entry → Intermediate layers:
+   Entry: [type] [identifier]
+   → [file:line] EntryFunction
+   → [file:line] IntermediateFunction
+
+   SDK Functions (Phase 3 targets):
+   [N]-A. [file:line] SDKFunction1
+          Operation: [Service] [Operation1]
+
+   [N]-B. [file:line] SDKFunction2
+          Operation: [Service] [Operation2]
+   ```
+
+   **EFFICIENT analysis procedure:**
+
+   Step 1: Analyze Entry/Intermediate layers ONCE (shared analysis)
+   For each function in Entry → Intermediate layers:
+   - Load function source code
+   - Identify code unrelated to ANY SDK operation
+   - Common unrelated code:
+     - External HTTP/gRPC calls ← MUST BE COMMENTED OUT
+     - Validation not related to SDK input
+     - Data enrichment from non-AWS sources
+     - Concurrent processing logic unrelated to SDK calls
+
+   Step 2: Analyze EACH SDK function individually
+   For each SDK function ([N]-A, [N]-B, [N]-C):
+   - Load SDK function source code
+   - Identify code specific to THIS SDK operation
+   - Identify code unrelated to THIS specific operation
+
+   Common unrelated code in SDK functions:
+   - Response parsing (parseAttributes, for-loops over resp.Items)
+   - Entity transformation (ToEntity)
+   - Pagination logic
+   - Detailed error wrapping
 
    **Objective**: Classify code into SDK-related (KEEP) and unrelated (COMMENT).
 
    **Classification criteria**:
 
-   SDK-related code (KEEP) - Code that directly contributes to SDK operation input:
+   SDK-related code (KEEP) - Code that directly contributes to SDK operation:
    1. SDK client initialization (e.g., `dynamodb.New()`, `s3.NewFromConfig()`)
    2. SDK input struct construction (e.g., `&dynamodb.PutItemInput{...}`)
-   3. Data transformation for SDK input (e.g., `buildItem()`, `marshalMap()`)
-   4. Variables/parameters used in SDK input fields
-   5. Context handling for SDK calls (e.g., `ctx` parameter)
-   6. Error handling for SDK responses (e.g., `if err != nil` after SDK call)
+   3. Data transformation for SDK input (variables used in input fields)
+   4. Context handling for SDK calls (e.g., `ctx` parameter)
+   5. MINIMAL error check (if err != nil { log; return })
+   6. SUCCESS confirmation logging (log.Printf("Operation succeeded"))
 
-   Unrelated code (COMMENT) - Code NOT used by SDK operation:
-   1. Logging statements (e.g., `logger.Info()`, `log.Printf()`)
-   2. Metrics/monitoring (e.g., `metrics.Increment()`)
-   3. External service calls (e.g., `userRepo.Get()`, HTTP requests)
+   DO NOT KEEP (must comment out):
+   - Detailed error wrapping (apperrors.Wrap, utils.GetFunctionName)
+   - Response parsing (parseAttributes, for-loops over resp.Items)
+   - Entity transformation (ToEntity, domain model conversion)
+   - Pagination logic (ExclusiveStartKey handling)
+   - Business logic using response data
+
+   Unrelated code (COMMENT):
+   1. Logging statements
+   2. Metrics/monitoring
+   3. External service calls
    4. Validation logic not related to SDK input
    5. Business logic after SDK operation completes
-   6. Cache operations (e.g., `cache.Set()`, `cache.Get()`)
-
-   **For EACH function in call chain** (entry → intermediate → target):
-
-   Step 1: Load function source code
-   Use Read tool:
-   - File: [function file path from Phase 1]
-   - Read entire function body
+   6. Cache operations
+   7. Response parsing into domain entities (NEW)
+   8. Detailed error wrapping (keep only basic error check) (NEW)
+   9. Entity transformation (parseAttributes, ToEntity, etc.) (NEW)
+   10. Pagination loops (NEW)
 
    Step 2: Identify SDK-related code (KEEP)
    - All code that defines, constructs, or provides data to SDK operation
@@ -366,25 +579,58 @@ Keep only SDK-related code, comment out everything else:
    metrics.Increment("calls")
    ```
 
-   Return format:
+   Return format for SINGLE SDK operation:
    ```
-   Call chain: [entry] → [intermediate] → [target]
-   SDK operations: [list]
+   Chain [N]: [entry_type] [identifier]
+   SDK operation: [Service] [Operation]
 
-   Function 1: [entry_function] at [file:line]
+   Function 1: [entry_function] at [file:line] (entry)
    SDK-related code (KEEP):
    - Lines X-Y: [description]
 
    Unrelated code (COMMENT):
    - Lines A-B: [description]
-   - Lines C-D: [description]
 
-   Function 2: [intermediate_function] at [file:line]
+   Function 2: [intermediate_function] at [file:line] (intermediate)
+   Unrelated code (COMMENT):
+   - Lines P-Q: [description]
+
+   Function 3: [sdk_function] at [file:line] (sdk)
    SDK-related code (KEEP):
    - Lines M-N: [description]
 
    Unrelated code (COMMENT):
-   - Lines P-Q: [description]
+   - Lines S-T: [description]
+   ```
+
+   Return format for MULTIPLE SDK operations:
+   ```
+   Chain [N]: [entry_type] [identifier] [★ Multiple SDK: M operations]
+
+   Entry/Intermediate layers (analyzed once):
+   Function 1: [entry_function] at [file:line] (entry)
+   Unrelated code (COMMENT):
+   - Lines A-B: [description]
+
+   Function 2: [intermediate_function] at [file:line] (intermediate)
+   Unrelated code (COMMENT):
+   - Lines C-D: External service call
+   - Lines E-F: Validation logic
+
+   SDK Functions (analyzed individually):
+   [N]-A. [sdk_function_1] at [file:line]
+   Operation: [Service] [Operation1]
+   SDK-related code (KEEP):
+   - Lines X-Y: [description]
+   Unrelated code (COMMENT):
+   - Lines P-Q: Response parsing
+
+   [N]-B. [sdk_function_2] at [file:line]
+   Operation: [Service] [Operation2]
+   SDK-related code (KEEP):
+   - Lines M-N: [description]
+   Unrelated code (COMMENT):
+   - Lines S-T: Entity transformation
    ```"
 
    C. **Apply comment-out modifications with Edit tool**
@@ -452,9 +698,23 @@ Keep only SDK-related code, comment out everything else:
       - Output: "コンパイル成功: [file_path]"
 
    F. Display completion and proceed to next chain:
+
+   For single SDK operation:
    ```
    完了 (i/N): コメントアウト処理
-   - 処理した関数数: X個
+   Chain: [entry_type] [identifier]
+   - Entry/Intermediate関数: X個
+   - SDK関数: 1個
+   - コメントアウトしたブロック数: Y個
+   - コンパイル: 成功
+   ```
+
+   For multiple SDK operations:
+   ```
+   完了 (i/N): コメントアウト処理
+   Chain: [entry_type] [identifier] [★ Multiple SDK: M operations]
+   - Entry/Intermediate関数: X個 (1回のみ分析)
+   - SDK関数: M個 (個別に分析)
    - コメントアウトしたブロック数: Y個
    - コンパイル: 成功
    ```
@@ -463,12 +723,28 @@ Keep only SDK-related code, comment out everything else:
 
 7. **Process all chains in optimal combination sequentially**
 
+   **Processing strategy:**
+   - Single SDK operation: Process chain once
+   - Multiple SDK operations: Process EACH SDK function separately (e.g., chain 2 with 3 SDK operations = 3 separate processing runs for 2-A, 2-B, 2-C)
+
    For each chain in optimal combination (index i from 1 to N):
 
    A. Display progress:
+
+   For single SDK operation:
    ```
    === テストデータ準備中 (i/N) ===
-   関数: [file_path:line_number] | [function_name] | [operations]
+   Chain: [entry_type] [identifier]
+   SDK function: [file:line] [function_name]
+   Operation: [Service] [Operation]
+   ```
+
+   For multiple SDK operations (each SDK function processed separately):
+   ```
+   === テストデータ準備中 (i/N, SDK function [N]-A/B/C) ===
+   Chain: [entry_type] [identifier] [★ Multiple SDK]
+   SDK function: [N]-A. [file:line] [function_name]
+   Operation: [Service] [Operation]
    ```
 
    B. Execute steps 8-10 for current chain
@@ -558,9 +834,22 @@ Keep only SDK-related code, comment out everything else:
         - Repeat until compilation succeeds
       - Output: "コンパイル成功: [file_path]"
 
-   C. Display completion and proceed to next chain:
+   C. Display completion and proceed to next SDK function/chain:
+
+      For single SDK operation:
       ```
       完了 (i/N): テストデータ準備
+      Chain: [entry_type] [identifier]
+      SDK function: [file:line] [function_name]
+      - Pre-insertコード: 追加済み / 不要
+      - コンパイル: 成功
+      ```
+
+      For multiple SDK operations (per SDK function):
+      ```
+      完了 (i/N, SDK function [N]-A): テストデータ準備
+      Chain: [entry_type] [identifier] [★ Multiple SDK]
+      SDK function: [N]-A. [file:line] [function_name]
       - Pre-insertコード: 追加済み / 不要
       - コンパイル: 成功
       ```
@@ -592,7 +881,37 @@ Keep only SDK-related code, comment out everything else:
 
 11. **Automatic progression**
    - If i < N: continue to next chain (repeat from step 7.A)
-   - If i = N: proceed to Phase 5
+   - If i = N: proceed to Phase 3.5
+
+### Phase 3.5: Verify Comment-out Completeness
+
+After completing Phase 3 for all chains, verify:
+
+1. Check entry/intermediate functions were analyzed:
+   - Use Grep: `pattern: "Commented out for testing"`, `glob: "cmd/**/*.go"`, `output_mode: "files_with_matches"`
+   - Use Grep: `pattern: "Commented out for testing"`, `glob: "internal/tasks/**/*.go"`, `output_mode: "files_with_matches"`
+   - If no matches: WARNING - intermediate functions may not have been analyzed
+
+2. Verify external service calls are commented:
+   - Use Grep: `pattern: "http\\.(Get|Post|Client)|grpc\\.(Dial|NewClient)"`, `output_mode: "content"`, `-C: 5`, `glob: "!(*_test.go)"`
+   - For each match in analyzed files: Check if preceded by "Commented out for testing"
+   - If uncommented external calls found: ERROR - re-run Phase 3
+
+3. Verify response processing is minimal:
+   - Use Grep: `pattern: "parseAttributes|ToEntity|for.*resp\\.(Items|Records)"`, `output_mode: "content"`, `glob: "!(*_test.go)"`
+   - For each match: Check if commented out or replaced with log.Printf
+   - If complex processing remains: ERROR - re-run Phase 3
+
+Output:
+```
+=== Phase 3検証結果 ===
+
+✓ Entry/intermediate functions analyzed: 3 files
+✓ External service calls commented: 2箇所
+✓ Response processing minimized: 4箇所
+
+全てのコードが接続確認に最適化されました
+```
 
 ### Phase 5: Final Summary
 
@@ -714,51 +1033,116 @@ Keep only SDK-related code, comment out everything else:
 ```
 === 重複排除と最適化後の組み合わせ ===
 
-合計SDK関数数: 5個 (重複排除前: 8個のチェーン)
-選択されたチェーン数: 5個
+合計SDK関数数: 7個 (重複排除前: 10個のチェーン)
+選択されたチェーン数: 4個
 
 [Sorted by priority: multiple SDK methods first, then by chain length]
 
-1. internal/service/order.go:120 | (*OrderService).Process | DynamoDB + S3 + SES [★ Multiple SDK]
-   Chain: main → OrderService.Process → DynamoDB PutItem → S3 PutObject → SES SendEmail (3 SDK methods, 4 hops)
+1. Chain: Task task_name_1 [★ Multiple SDK: 3 operations]
 
-2. internal/gateway/data.go:89 | (*DataGateway).Import | S3 + DynamoDB [★ Multiple SDK] [+1 other chain]
-   Chain: handler → ImportService.Run → S3 GetObject → DynamoDB BatchWriteItem (2 SDK methods, 5 hops)
+   Entry → Intermediate layers:
+   Entry: Task task_name_1
+   → cmd/task_name_1/main.go:100 main
+   → internal/tasks/task_worker.go:50 Execute
+   → internal/service/service_name.go:80 ProcessData
 
-3. internal/repository/user.go:45 | (*UserRepository).Save | DynamoDB PutItem [+2 other chains]
-   Chain: main → UserUsecase.Create → UserRepository.Save (1 SDK method, 2 hops)
+   SDK Functions (Phase 3 targets):
+   1-A. internal/service/service_name.go:120 createRecord
+        Operation: DynamoDB PutItem
 
-4. internal/gateway/s3.go:120 | (*S3Gateway).Upload | S3 PutObject
-   Chain: main → FileService.Process → S3Gateway.Upload (1 SDK method, 2 hops)
+   1-B. internal/service/service_name.go:150 storeFile
+        Operation: S3 PutObject
 
-5. internal/repository/user.go:89 | (*UserRepository).Get | DynamoDB GetItem
-   Chain: handler → UserService.Fetch → UserRepository.Get (1 SDK method, 3 hops)
+   1-C. internal/service/service_name.go:180 sendMessage
+        Operation: SES SendEmail
+
+   (3 SDK operations, 5 hops) Active callers: 2箇所
+
+2. Chain: POST /v1/resource/action [★ Multiple SDK: 2 operations] [+1 other chain]
+
+   Entry → Intermediate layers:
+   Entry: API POST /v1/resource/action
+   → internal/api/handler/v1/handler_name.go:80 HandleAction
+   → internal/gateway/gateway_name.go:89 ProcessAction
+
+   SDK Functions (Phase 3 targets):
+   2-A. internal/gateway/gateway_name.go:120 fetchData
+        Operation: S3 GetObject
+
+   2-B. internal/gateway/gateway_name.go:200 saveBatch
+        Operation: DynamoDB BatchWriteItem
+
+   (2 SDK operations, 4 hops) Active callers: 1箇所
+
+3. Chain: Task task_name_2 [+2 other chains]
+
+   Entry: Task task_name_2
+   → cmd/task_name_2/main.go:50 main
+   → internal/usecase/usecase_name.go:30 Execute
+   → internal/repository/repository_name.go:45 Save
+   → DynamoDB PutItem
+
+   (1 SDK operation, 3 hops) Active callers: 3箇所
+
+4. Chain: API GET /v1/resource/:id
+
+   Entry: API GET /v1/resource/:id
+   → internal/api/handler/v1/handler_name.go:100 GetResource
+   → internal/service/service_name.go:50 Fetch
+   → internal/repository/repository_name.go:89 Get
+   → DynamoDB GetItem
+
+   (1 SDK operation, 4 hops) Active callers: 2箇所
 ```
 
 ### Batch Approval Summary (Phase 2)
 ```
 === バッチ処理する組み合わせ ===
 
-合計SDK関数数: 5個
-- Create操作: 3個
+合計SDK関数数: 7個
+- Create操作: 4個
 - Update操作: 0個
-- Read操作: 1個
+- Read操作: 2個
 - Delete操作: 0個
 - 複数SDK使用: 2個
 
 処理対象のチェーン:
-1. POST /v1/orders
-   → internal/api/handler/v1/order_handler.go:50 PostOrder
-   → internal/service/order.go:120 Process
-   → DynamoDB PutItem → S3 PutObject → SES SendEmail
-2. POST /v1/data/import
-   → internal/api/handler/v1/data_handler.go:80 Import
-   → internal/gateway/data.go:89 Import
-   → S3 GetObject → DynamoDB BatchWriteItem
-3. main
-   → internal/usecase/user.go:30 Create
-   → internal/repository/user.go:45 Save
+
+1. Chain: Task task_name_1 [★ Multiple SDK: 3 operations]
+   Entry → Intermediate layers:
+   Entry: Task task_name_1
+   → cmd/task_name_1/main.go:100 main
+   → internal/tasks/task_worker.go:50 Execute
+   → internal/service/service_name.go:80 ProcessData
+
+   SDK Functions:
+   1-A. internal/service/service_name.go:120 createRecord | DynamoDB PutItem
+   1-B. internal/service/service_name.go:150 storeFile | S3 PutObject
+   1-C. internal/service/service_name.go:180 sendMessage | SES SendEmail
+
+2. Chain: POST /v1/resource/action [★ Multiple SDK: 2 operations]
+   Entry → Intermediate layers:
+   Entry: API POST /v1/resource/action
+   → internal/api/handler/v1/handler_name.go:80 HandleAction
+   → internal/gateway/gateway_name.go:89 ProcessAction
+
+   SDK Functions:
+   2-A. internal/gateway/gateway_name.go:120 fetchData | S3 GetObject
+   2-B. internal/gateway/gateway_name.go:200 saveBatch | DynamoDB BatchWriteItem
+
+3. Chain: Task task_name_2
+   Entry: Task task_name_2
+   → cmd/task_name_2/main.go:50 main
+   → internal/usecase/usecase_name.go:30 Execute
+   → internal/repository/repository_name.go:45 Save
    → DynamoDB PutItem
+
+4. Chain: API GET /v1/resource/:id
+   Entry: API GET /v1/resource/:id
+   → internal/api/handler/v1/handler_name.go:100 GetResource
+   → internal/service/service_name.go:50 Fetch
+   → internal/repository/repository_name.go:89 Get
+   → DynamoDB GetItem
 ```
 
 ### Comment-out Summary (Phase 3)
