@@ -239,22 +239,97 @@ Verify all modifications in a single phase with one compilation check.
      - Check preceding 20 lines for pre-insert comment pattern: `// Pre-insert test data`
      - If missing: ERROR with list of missing pre-inserts
 
-4. **Display Phase 3 summary**
+4. **Verify execution flow and SDK operation coverage** (Read tool, static analysis)
+
+   For each chain in `.migration-chains.json`:
+
+   a. **Analyze entry point function execution flow**
+      - Read entry point function from `call_chain[0]` (file:line)
+      - Track all SDK operation calls in the function body
+      - For each SDK operation in chain's `sdk_operations`:
+        - Check if operation is directly called in entry point
+        - If not direct, trace through function calls in `call_chain`
+        - Identify path from entry point to SDK operation
+
+   b. **Detect return value flow issues**
+      - For functions with commented response processing:
+        - Identify return statement and its value type
+        - Check if caller uses return value in control flow:
+          - `for _, x := range returnValue` patterns
+          - `switch returnValue.Field` patterns
+          - `if returnValue != nil/empty` patterns
+        - If empty value causes path to skip:
+          - Record issue: function name, line, affected SDK operations
+          - Determine fix: dummy data structure needed
+
+   c. **Verify SDK operation coverage**
+      - Count reachable SDK operations from entry point
+      - Compare with total operations in chain's `sdk_operations` array
+      - If mismatch:
+        - Display warning:
+          ```
+          [WARNING] 実行フロー問題検出 (Chain N)
+          関数: GetEntitiesByStatusAndDate (file.go:100)
+          問題: 戻り値が空のため、後続の3個のSDK操作が実行されません
+          - 影響を受けるSDK操作: [UpdateItem, PutItem, TransactWriteItems]
+          ```
+        - Prepare auto-fix: dummy data to enable path execution
+
+   d. **Apply execution flow fixes** (Edit tool)
+      - For each detected flow issue:
+        - Determine appropriate dummy data:
+          - For slice: `[]Type{{Field: value}}` with values satisfying downstream conditions
+          - For struct: `Type{Field: value}` matching switch/if conditions
+          - Analyze downstream switch/if to pick correct values
+        - Apply Edit: Replace empty return with populated dummy
+        - Display: "実行フロー修正: [function] にダミーデータ追加"
+
+   e. **Re-verify after fixes**
+      - If fixes applied:
+        - Re-run compilation (step 1)
+        - Re-check SDK operation coverage
+        - Repeat until all operations reachable (max 3 iterations)
+        - Display: "[OK] 実行フロー修正完了: SDK操作カバレッジ X/X (100%)"
+
+   f. **Display SDK coverage summary**
+      ```
+      === SDK操作カバレッジ ===
+      Chain 1: 4/4 操作が到達可能 [OK]
+      Chain 2: 2/2 操作が到達可能 [OK]
+      Chain 3: 1/1 操作が到達可能 [OK]
+      ```
+
+      Or if issues detected before fixes:
+      ```
+      === SDK操作カバレッジ ===
+      Chain 1: 1/4 操作が到達可能 [WARNING]
+        到達不可能:
+        - UpdateItem (counter.go:60) - 原因: ループがスキップ
+        - PutItem (dir_file.go:254) - 原因: ループがスキップ
+        - TransactWriteItems (datastore.go:519) - 原因: ループがスキップ
+
+      修正中...
+      ```
+
+5. **Display Phase 3 summary**
    ```
    === Phase 3: 検証完了 ===
    - コンパイル: 成功
    - 外部サービス呼び出し: すべてコメント済み
    - レスポンス処理: 最小化済み
    - Pre-insert: すべて生成済み (N operations)
+   - 実行フロー: 修正完了 (M chains with fixes)
+   - SDK操作カバレッジ: X/X 操作が到達可能 (100%)
    ```
 
-5. **Display final completion**
+6. **Display final completion**
    ```
    === Phase 1-3 完了 ===
    処理済みチェーン: N個
    コメントアウトブロック: X個
    Pre-insert生成: Y個
    実行フロー修正: W個
+   SDK操作カバレッジ: Z/Z 操作 (100%)
    最終コンパイル: 成功
 
    Next: See "Next Steps" section below
@@ -289,9 +364,17 @@ Verify all modifications in a single phase with one compilation check.
 - Cause: Update/Read/Delete operation without pre-insert code
 - Solution: Check Phase 1 operation type classification and Phase 2 application logs
 
+**Phase 3 execution flow verification failed**
+- Cause: SDK operations unreachable due to empty return values
+- Solution: Phase 3 step 4d auto-fixes by adding dummy data; re-verification runs automatically (max 3 iterations)
+
+**Phase 3 SDK operation coverage incomplete**
+- Cause: Not all SDK operations in chain are reachable from entry point
+- Solution: Phase 3 step 4 detects and fixes automatically; check modified functions for correct dummy data structure
+
 **Execution flow issues**
 - Cause: Dummy values don't satisfy conditional branches
-- Solution: Phase 1 identifies issues, Phase 2 applies fixes automatically
+- Solution: Phase 1 identifies issues, Phase 2 applies fixes automatically; Phase 3 step 4 provides additional verification and auto-fix
 
 ## Example
 
@@ -360,6 +443,125 @@ func (s *Service) GetEntities(ctx context.Context) ([]Entity, error) {
 }
 ```
 
+### Example: Execution Flow Issue (Multiple SDK Operations)
+
+This example demonstrates the issue reported in #96 where empty return values prevent subsequent SDK operations from being executed.
+
+Input (.migration-chains.json):
+```json
+{
+  "chains": [{
+    "call_chain": [
+      {"file": "handler.go", "line": 50, "function": "ProcessEntities"},
+      {"file": "service.go", "line": 100, "function": "GetEntitiesByStatus"}
+    ],
+    "sdk_operations": [
+      {"file": "service.go", "line": 110, "operation": "Query", "type": "Read"},
+      {"file": "handler.go", "line": 60, "operation": "UpdateItem", "type": "Update"},
+      {"file": "handler.go", "line": 65, "operation": "PutItem", "type": "Create"}
+    ]
+  }]
+}
+```
+
+Before Phase 3 step 4 (compilation succeeds but flow broken):
+```go
+// service.go
+func (s *Service) GetEntitiesByStatus(ctx context.Context) ([]Entity, error) {
+    result, err := s.db.Query(ctx, &dynamodb.QueryInput{...})
+    if err != nil {
+        return nil, err
+    }
+    // // Response processing commented out
+    // for _, item := range result.Items {
+    //     entity := parseEntity(item)
+    //     entities = append(entities, entity)
+    // }
+    return []Entity{}, nil  // Empty slice returned
+}
+
+// handler.go
+func (h *Handler) ProcessEntities(ctx context.Context) error {
+    entities, err := h.svc.GetEntitiesByStatus(ctx)
+    if err != nil {
+        return err
+    }
+    // This loop never executes due to empty slice
+    for _, entity := range entities {
+        // UpdateItem never reached
+        _, err := h.db.UpdateItem(ctx, &dynamodb.UpdateItemInput{...})
+        if err != nil {
+            return err
+        }
+        // PutItem never reached
+        _, err = h.db.PutItem(ctx, &dynamodb.PutItemInput{...})
+        if err != nil {
+            return err
+        }
+    }
+    return nil
+}
+```
+
+Phase 3 step 4 detects issue:
+```
+=== SDK操作カバレッジ ===
+Chain 1: 1/3 操作が到達可能 [WARNING]
+  到達不可能:
+  - UpdateItem (handler.go:60) - 原因: ループがスキップ
+  - PutItem (handler.go:65) - 原因: ループがスキップ
+
+修正中...
+```
+
+After Phase 3 step 4d auto-fix:
+```go
+// service.go - Phase 3 step 4d adds dummy data
+func (s *Service) GetEntitiesByStatus(ctx context.Context) ([]Entity, error) {
+    result, err := s.db.Query(ctx, &dynamodb.QueryInput{...})
+    if err != nil {
+        return nil, err
+    }
+    // // Response processing commented out
+    // for _, item := range result.Items {
+    //     entity := parseEntity(item)
+    //     entities = append(entities, entity)
+    // }
+    // Dummy data added to enable downstream execution
+    return []Entity{{ID: "test-id", Status: "active"}}, nil
+}
+
+// handler.go - now loop executes, all SDK operations reachable
+func (h *Handler) ProcessEntities(ctx context.Context) error {
+    entities, err := h.svc.GetEntitiesByStatus(ctx)
+    if err != nil {
+        return err
+    }
+    // Loop now executes with dummy data
+    for _, entity := range entities {
+        // UpdateItem now reachable
+        _, err := h.db.UpdateItem(ctx, &dynamodb.UpdateItemInput{...})
+        if err != nil {
+            return err
+        }
+        // PutItem now reachable
+        _, err = h.db.PutItem(ctx, &dynamodb.PutItemInput{...})
+        if err != nil {
+            return err
+        }
+    }
+    return nil
+}
+```
+
+Phase 3 step 4f confirms fix:
+```
+[OK] 実行フロー修正完了: SDK操作カバレッジ 3/3 (100%)
+
+=== SDK操作カバレッジ ===
+Chain 1: 3/3 操作が到達可能 [OK]
+```
+
 ## Key Advantages
 
 **Optimized processing flow:**
@@ -380,6 +582,13 @@ func (s *Service) GetEntities(ctx context.Context) ([]Entity, error) {
 - No context accumulation
 - Predictable behavior
 - Clear separation: Analysis → Application → Verification
+
+**Execution flow verification (Phase 3 step 4):**
+- Complete SDK operation testing: All SDK operations in chain are reachable and testable
+- Automatic correction: Flow issues detected and fixed without manual intervention
+- Improved verification reliability: Ensures not just compilation but actual execution paths
+- Reduced debugging time: Prevents discovering untested SDK operations after deployment
+- Coverage guarantee: All operations in `.migration-chains.json` verified as reachable
 
 ## Next Steps
 
