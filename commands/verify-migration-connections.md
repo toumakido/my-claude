@@ -754,8 +754,7 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
       - For each function in call chain (entry → target):
         - For each code block marked as COMMENT:
           - Use Edit tool: Replace block with commented version
-          - Format: Prefix marker line + comment out all lines with `//`
-          - Marker: `// Commented out for testing: Unrelated to SDK operation`
+          - Format: Comment out all lines with `//`
 
    Example Edit tool usage:
    ```go
@@ -766,7 +765,6 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    }
 
    new_string:
-   // Commented out for testing: Unrelated to SDK operation
    // userData, err := h.userRepo.GetUser(ctx, userID)
    // if err != nil {
    //     return err
@@ -791,7 +789,6 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 
    Example:
    ```go
-   // Commented out for testing: Unrelated to SDK operation
    // businessDate := dateRepo.GetBusinessDate(ctx)
    businessDate := "20250101" // Dummy for testing
    ```
@@ -977,20 +974,15 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 
 After Phase 3, verify all unrelated code is commented out:
 
-1. Check entry/intermediate functions analyzed:
-   - Grep: `pattern: "Commented out for testing"`, `glob: "cmd/**/*.go"`, `output_mode: "files_with_matches"`
-   - Grep: `pattern: "Commented out for testing"`, `glob: "internal/tasks/**/*.go"`, `output_mode: "files_with_matches"`
-   - If no matches: WARNING
-
-2. Verify external service calls commented:
+1. Verify external service calls are commented:
    - Grep: `pattern: "http\\.(Get|Post|Client)|grpc\\.(Dial|NewClient)"`, `output_mode: "content"`, `-C: 5`, `glob: "!(*_test.go)"`
-   - Check each match preceded by "Commented out for testing"
-   - If uncommented: ERROR - re-run Phase 3
+   - For each match in modified files, check if it's commented out (line starts with `//`)
+   - If uncommented in modified chain functions: ERROR - re-run Phase 3
 
-3. Verify response processing minimized:
+2. Verify response processing is minimized:
    - Grep: `pattern: "parseAttributes|ToEntity|for.*resp\\.(Items|Records)"`, `output_mode: "content"`, `glob: "!(*_test.go)"`
-   - Check each match commented or replaced with log.Printf
-   - If complex processing remains: ERROR - re-run Phase 3
+   - For each match in modified files, check if it's commented or replaced with log.Printf
+   - If complex processing remains in modified chain functions: ERROR - re-run Phase 3
 
 ### Phase 5: AWS Verification Procedures
 
