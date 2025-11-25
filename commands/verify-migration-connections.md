@@ -487,16 +487,6 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    Estimated complexity: Medium (4 operations, 0 external deps)
    ```
 
-   **チェックリスト (ユーザー確認用):**
-   ```
-   承認前に以下を確認:
-   □ 全てのチェーンのエントリーポイントが明確か
-   □ 外部依存関係（HTTP/gRPC）が許容範囲内か
-   □ Pre-insert要件を満たせるか
-   □ 統合チェーンの利点を活かしているか
-   □ 未使用関数が含まれていないか
-   ```
-
    B. Display summary of optimal combination:
    ```
    === バッチ処理する組み合わせサマリー ===
@@ -1283,13 +1273,6 @@ After Phase 3, verify all unrelated code is commented out:
 
    External Dependencies: None
    Estimated complexity: Low (1 operation, 0 external deps)
-
-チェックリスト:
-□ 全てのチェーンのエントリーポイントが明確か
-□ 外部依存関係（HTTP/gRPC）が許容範囲内か
-□ Pre-insert要件を満たせるか
-□ 統合チェーンの利点を活かしているか
-□ 未使用関数が含まれていないか
 ```
 
 ### Comment-out Summary (Phase 3)
@@ -1328,14 +1311,6 @@ Entry: Task task_name_2
 → internal/repository/repository_name.go:45 Save()
 → internal/repository/repository_name.go:48 db.PutItem()  ← DynamoDB PutItem
 
-### 実行コマンド
-```bash
-aws ecs run-task \
-  --cluster production-cluster \
-  --task-definition task_name_2:latest \
-  --launch-type FARGATE
-```
-
 ### X-Ray確認ポイント
 - DynamoDB PutItem × 1回 (entities_table)
 - Response: 200 OK, item created
@@ -1363,13 +1338,6 @@ C. internal/tasks/batch_worker.go:167 → internal/service/file_storage.go:254 d
 
 D. internal/tasks/batch_worker.go:116 → internal/service/entity_datastore.go:519 db.TransactWriteItems()
    Operation: DynamoDB TransactWriteItems
-
-### 実行コマンド
-```bash
-aws ecs run-task \
-  --cluster production-cluster \
-  --task-definition batch_task:latest \
-  --launch-type FARGATE
 ```
 
 ### X-Ray確認ポイント
