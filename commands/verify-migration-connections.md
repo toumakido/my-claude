@@ -14,7 +14,7 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 **Post-execution steps:**
 1. Review `git diff`
 2. Deploy to AWS test environment
-3. Execute verification procedures (Step 13 output)
+3. Execute verification procedures (Step 12 output: チェーンごとの動作確認手順)
 
 **Critical notes:**
 - Modifies production code in working tree (not automatically reverted)
@@ -1002,74 +1002,120 @@ After Phase 3, verify all unrelated code is commented out:
    - Check each match commented or replaced with log.Printf
    - If complex processing remains: ERROR - re-run Phase 3
 
-### Phase 5: Final Summary
+### Phase 5: AWS Verification Procedures
 
-12. **Output final summary report**
+12. **Generate AWS verification procedures with complete call chain details**
 
-    ```
-    === 処理完了サマリー ===
+    Output AWS-specific verification procedures for each call chain.
 
-    処理したSDK関数: N個
-    - Create: A個
-    - Update: B個 (Pre-insert追加済み)
-    - Read: X個 (Pre-insert追加済み)
-    - Delete: Z個 (Pre-insert追加済み)
-    - 複数SDK使用: W個
+    **For EACH chain from Phase 1 deduplication result:**
 
-    コメントアウト (Phase 3):
-    - [file_path_1] (X blocks)
-    - [file_path_2] (Y blocks)
-
-    書き換え (Phase 4):
-    - [file_path_1] (Pre-insert追加)
-    - [file_path_2] (Pre-insert追加)
-
-    コンパイル: 成功P個 / 失敗Q個
-    ```
-
-13. **Generate AWS verification procedures**
-
-    Output AWS-specific verification procedures grouped by execution method:
-
+    Display format for single SDK operation:
     ```markdown
-    ## AWS環境での動作確認方法
+    ## Chain [N]: [entry_type] [identifier]
 
-    ### 1. [Execution Method] (例: POST /v1/entities)
-    **検証対象関数**:
-    - [file:line] FunctionName1 | [Operation1]
-    - [file:line] FunctionName2 | [Operation2]
+    ### コールチェーン
+    Entry: [type] [identifier]
+    → [file:line] EntryFunction
+    → [file:line] IntermediateFunction1
+    → [file:line] IntermediateFunction2
+    → [file:line] SDKFunction  ← [Service] [Operation]
 
-    **実行コマンド**:
+    ### 実行コマンド
     ```bash
-    curl -X POST https://api.example.com/v1/entities \
+    # For API endpoint
+    curl -X [METHOD] https://[host]/[path] \
       -H "Content-Type: application/json" \
-      -d '{"param":"value"}'
+      -d '{"key":"value"}'
+
+    # For Task
+    aws ecs run-task \
+      --cluster [cluster-name] \
+      --task-definition [task-name]
     ```
 
-    **X-Ray確認ポイント**:
+    ### X-Ray確認ポイント
+    - [Service] [Operation] × N回
+    - Response: [Expected behavior]
+    ```
+
+    Display format for multiple SDK operations:
+    ```markdown
+    ## Chain [N]: [entry_type] [identifier] [★ Multiple SDK: M operations]
+
+    ### コールチェーン
+    Entry → Intermediate layers (共通):
+    Entry: [type] [identifier]
+    → [file:line] EntryFunction
+    → [file:line] IntermediateFunction
+
+    SDK Functions (個別):
+    [N]-A. [file:line] IntermediateFunction → ... → [file:line] SDKFunction1
+           Operation: [Service] [Operation1]
+
+    [N]-B. [file:line] IntermediateFunction → ... → [file:line] SDKFunction2
+           Operation: [Service] [Operation2]
+
+    ### 実行コマンド
+    ```bash
+    # Single execution command covers all SDK operations
+    [command based on entry point type]
+    ```
+
+    ### X-Ray確認ポイント
     - [Service] [Operation1] × N回
     - [Service] [Operation2] × M回
-    - Data flow: Operation1 → Operation2
+    - Data flow: Operation1 → Operation2 → ...
     ```
 
-    ### Grouping Policy
+    **Complete example:**
+    ```markdown
+    ## Chain 1: Task batch_task [★ Multiple SDK: 4 operations]
 
-    Group by execution method (not by function):
+    ### コールチェーン
+    Entry → Intermediate layers (共通):
+    Entry: Task batch_task
+    → cmd/batch_task/main.go:136 main()
+    → internal/tasks/batch_worker.go:40 Execute()
 
-    Good:
-    ```
-    ### POST /v1/entities
-    Verifies: FunctionA (PutItem), FunctionB (Query)
-    curl -X POST ...
+    SDK Functions (個別):
+    A. internal/tasks/batch_worker.go:41 → internal/service/entity_datastore.go:79 GetByIndex()
+       → internal/service/entity_datastore.go:105 db.Query()
+       Operation: DynamoDB Query
+
+    B. internal/tasks/batch_worker.go:134 → internal/service/counter.go:37 GetNext()
+       → internal/service/counter.go:60 db.UpdateItem()
+       Operation: DynamoDB UpdateItem (×2)
+
+    C. internal/tasks/batch_worker.go:167 → internal/service/file_storage.go:235 insertRecord()
+       → internal/service/file_storage.go:254 db.PutItem()
+       Operation: DynamoDB PutItem (×2)
+
+    D. internal/tasks/batch_worker.go:116 → internal/service/entity_datastore.go:421 Update()
+       → internal/service/entity_datastore.go:519 db.TransactWriteItems()
+       Operation: DynamoDB TransactWriteItems
+
+    ### 実行コマンド
+    ```bash
+    aws ecs run-task \
+      --cluster production-cluster \
+      --task-definition batch_task:latest \
+      --launch-type FARGATE
     ```
 
-    Bad (duplicates commands):
+    ### X-Ray確認ポイント
+    - DynamoDB Query × 1回 (entities table)
+    - DynamoDB UpdateItem × 2回 (counter table)
+    - DynamoDB PutItem × 2回 (files table)
+    - DynamoDB TransactWriteItems × 1回 (entities table)
+    - Data flow: Query entities → Update counter → Put files → TransactWrite entities
     ```
-    ### FunctionA
-    curl -X POST ...
-    ### FunctionB
-    curl -X POST ...
-    ```
+
+    **DO NOT include:**
+    - Summary statistics (processed SDK functions count, etc.)
+    - File modification details (commented files, edited files)
+    - Compilation results
+    - Next steps or actions
 
 ## Output Format
 
@@ -1266,29 +1312,72 @@ After Phase 3, verify all unrelated code is commented out:
 - コンパイル: 成功
 ```
 
-### Final Summary (Phase 5)
+### AWS Verification Procedures (Phase 5)
+
+Output verification procedures for each call chain with complete details.
+
+**Example for single SDK operation:**
+```markdown
+## Chain 3: Task task_name_2
+
+### コールチェーン
+Entry → Complete call chain:
+Entry: Task task_name_2
+→ cmd/task_name_2/main.go:50 main()
+→ internal/usecase/usecase_name.go:30 Execute()
+→ internal/repository/repository_name.go:45 Save()
+→ internal/repository/repository_name.go:48 db.PutItem()  ← DynamoDB PutItem
+
+### 実行コマンド
+```bash
+aws ecs run-task \
+  --cluster production-cluster \
+  --task-definition task_name_2:latest \
+  --launch-type FARGATE
 ```
-=== 処理完了サマリー ===
 
-処理したSDK関数: 5個
-- Create操作: 3個
-- Update操作: 0個
-- Read操作: 1個 (Pre-insertコード追加済み)
-- Delete操作: 0個
-- 複数SDK使用: 2個
+### X-Ray確認ポイント
+- DynamoDB PutItem × 1回 (entities_table)
+- Response: 200 OK, item created
+```
 
-コメントアウトしたファイル: (Phase 3で処理)
-- internal/service/order.go (3 blocks)
-- internal/gateway/data.go (2 blocks)
-- internal/repository/user.go (1 block)
-- internal/gateway/s3.go (1 block)
+**Example for multiple SDK operations:**
+```markdown
+## Chain 1: Task batch_task [★ Multiple SDK: 4 operations]
 
-書き換えたファイル: (Phase 4で処理)
-- internal/repository/user.go (Pre-insert追加)
+### コールチェーン
+Entry → Intermediate layers (共通):
+Entry: Task batch_task
+→ cmd/batch_task/main.go:136 main()
+→ internal/tasks/batch_worker.go:40 Execute()
 
-コンパイル: 成功5個 / 失敗0個
+SDK Functions (個別):
+A. internal/tasks/batch_worker.go:41 → internal/service/entity_datastore.go:105 db.Query()
+   Operation: DynamoDB Query
 
-次: AWS環境での動作確認手順を参照（Step 13の出力）
+B. internal/tasks/batch_worker.go:134 → internal/service/counter.go:60 db.UpdateItem()
+   Operation: DynamoDB UpdateItem (×2)
+
+C. internal/tasks/batch_worker.go:167 → internal/service/file_storage.go:254 db.PutItem()
+   Operation: DynamoDB PutItem (×2)
+
+D. internal/tasks/batch_worker.go:116 → internal/service/entity_datastore.go:519 db.TransactWriteItems()
+   Operation: DynamoDB TransactWriteItems
+
+### 実行コマンド
+```bash
+aws ecs run-task \
+  --cluster production-cluster \
+  --task-definition batch_task:latest \
+  --launch-type FARGATE
+```
+
+### X-Ray確認ポイント
+- DynamoDB Query × 1回 (entities table)
+- DynamoDB UpdateItem × 2回 (counter table)
+- DynamoDB PutItem × 2回 (files table)
+- DynamoDB TransactWriteItems × 1回 (entities table)
+- Data flow: Query entities → Update counter → Put files → TransactWrite entities
 ```
 
 ## Analysis Requirements
@@ -1323,7 +1412,7 @@ After Phase 3, verify all unrelated code is commented out:
 2. Phase 2: Single batch approval (AskUserQuestion)
 3. Phase 3: Comment out unrelated code (automatic)
 4. Phase 4: Generate test data, verify compilation (automatic)
-5. Phase 5: Display final summary
+5. Phase 5: Output AWS verification procedures (チェーンごとの動作確認手順)
 
 ## Notes
 
