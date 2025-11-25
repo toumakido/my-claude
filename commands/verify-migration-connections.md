@@ -6,7 +6,7 @@ Output language: Japanese, formal business tone
 
 Prepares code for AWS SDK v2 connection testing by temporarily modifying migrated code:
 
-1. Extract migrated functions from current branch
+1. Extract migrated functions from current branch (Phase 1)
 2. Comment out unrelated code to isolate AWS SDK operations (Phase 3)
 3. Generate minimal test data (Phase 4)
 4. Output AWS environment verification procedures (Phase 5)
@@ -14,12 +14,10 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 **Post-execution steps:**
 1. Review `git diff`
 2. Deploy to AWS test environment
-3. Execute verification procedures (Step 14 output)
-4. Run `git restore .` to revert changes
+3. Execute verification procedures (Step 13 output)
 
 **Critical notes:**
 - Modifies production code in working tree (not automatically reverted)
-- Phase 3 isolation is mandatory to prevent interference from unrelated code
 - Creates testable state, not permanent test code
 
 ## Prerequisites
@@ -32,14 +30,17 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 ### Phase 1: Extract Functions and Call Chains
 
 1. **Validate branch has AWS SDK v2 changes**
-   - Run: `git diff main...HEAD`
-   - Search for pattern: `github.com/aws/aws-sdk-go-v2`
+   - Run: `git diff main...HEAD` and store result in variable
+   - Search stored diff for pattern: `github.com/aws/aws-sdk-go-v2`
    - If not found: output "このブランチはAWS SDK Go v2関連の変更を含んでいません" and exit immediately
 
 2. **Extract functions and call chains with Task tool** (subagent_type=general-purpose)
+   **Context**: Use stored git diff from Step 1
    Task prompt: "Parse git diff and extract all functions/methods using AWS SDK v2 with their call chains.
 
-   Step 1: Extract functions using Grep in this order:
+   **Step 1: Extract SDK functions**
+
+   Use Grep in this order:
    1. Search for imports: `github.com/aws/aws-sdk-go-v2/service/*`
    2. Search for client calls: `client\.(PutItem|GetObject|Query|UpdateItem|DeleteItem|PutObject|GetObject|DeleteObject|SendEmail|Publish)` pattern
    3. Filter functions with `context.Context` parameter
@@ -50,7 +51,11 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    - AWS service from import path (dynamodb, s3, ses, etc.)
    - Operation from client method name (PutItem, GetObject, etc.)
 
-   Step 2: For each function from Step 1, trace COMPLETE call chains including entry point using Grep:
+   **Step 2: Trace call chains**
+
+   Prerequisites: Entry point must exist and be verified before tracing
+
+   For each function from Step 1, trace COMPLETE call chains including entry point using Grep:
 
    Entry point identification and verification:
    1. Identify entry point type:
@@ -73,7 +78,7 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    - Record all SDK operations for grouped verification
    - **Parallel execution**: Execute Grep searches in parallel for functions with independent call chains (no shared intermediate layers)
 
-   Step 2.5: Verify active callers (exclude unused implementations)
+   **Step 3: Verify active callers**
 
    For each extracted function:
    1. Use Grep to search for function calls (exclude *_test.go, mocks/*.go)
@@ -82,7 +87,9 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
       - Mark as "SKIP - No active callers"
       - Exclude from call chain list
 
-   **Multiple path handling** (when function has 2+ call chains):
+   **Step 4: Handle multiple paths**
+
+   When function has 2+ call chains:
    1. Apply exclusion criteria first (eliminate complex paths):
       - Exclude if 6+ external dependencies (too many mocks needed)
       - Exclude if 6+ chain hops (too deep call stack)
@@ -96,6 +103,8 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
       Selected: POST /v1/entities (2 dependencies, 3 hops)
       Excluded: Background job path (7 dependencies, 5 hops) - too complex
       ```
+
+   **Step 5: Format output**
 
    Call chain format:
    ```
@@ -123,7 +132,7 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
      - internal/service/file.go:123 FunctionName
      ```
 
-   Step 3: Sort call chains by priority:
+   **Step 6: Sort by priority**
    1. First: Chains with multiple AWS SDK methods (higher priority)
    2. Within same SDK method count: Sort by chain length (shorter = easier)
 
@@ -139,7 +148,7 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 3. **Deduplicate chains with coverage-based selection (Task tool)** (subagent_type=general-purpose)
    Task prompt: "Deduplicate call chains using coverage-based selection to minimize redundant verification:
 
-   **Strategy**: Prioritize chains with multiple SDK operations, track covered operations, skip chains that don't add new coverage.
+   **Objective**: Select minimum chains that cover all SDK operations. Prioritize chains with multiple SDK operations to reduce total execution count.
 
    Step 1: Sort chains by SDK operation count (descending)
    - Primary sort: Number of SDK operations (more operations = higher priority)
@@ -199,13 +208,10 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    Result: ChainB [+2 similar chains], ChainD
    ```
 
-   Step 3: Verify entry points (already verified in Phase 1 Step 2)
-   For each selected chain:
-   1. Confirm entry point was verified in Phase 1
-   2. If entry point marked as "SKIP - No entry point" in Phase 1:
-      - Remove from optimal combination
-      - Add skipped operations back to uncovered set
-      - Continue selection from remaining chains
+   Step 3: Verify entry points
+   Use entry point verification results from Phase 1 Step 2. For each selected chain:
+   1. Check entry point status from Phase 1 results
+   2. If marked as "SKIP - No entry point": exclude from optimal combination
 
    Step 4: Handle same-operation chains with different parameters
    When multiple chains use same SDK operation but with different parameters:
@@ -303,20 +309,13 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 
 ### Phase 3: Comment-out Unrelated Code
 
-**CRITICAL - MUST NOT SKIP**: This phase MUST be executed for ALL chains without exception.
-
 **Approach**:
 Keep only SDK-related code, comment out everything else:
 1. Identify SDK operation and its input variables (e.g., `dynamoDB.PutItem(ctx, &input)`)
 2. Identify SDK-related code: code that builds SDK input
 3. Comment out unrelated code: code NOT used by SDK operation
 
-**Why this is required**:
-- Isolates target AWS SDK operations by removing unrelated code
-- Enables focused testing of SDK v2 migration
-- Without this step, verification tests too many operations simultaneously
-
-6. **Comment out unrelated code in call chain functions (strict mode)**
+6. **Comment out unrelated code in call chain functions**
 
    For each chain in optimal combination (index i from 1 to N):
 
@@ -329,16 +328,23 @@ Keep only SDK-related code, comment out everything else:
    B. **Identify SDK-related code and unrelated code** (Task tool: subagent_type=general-purpose)
    Task prompt: "For call chain [entry_point → ... → target_function] with AWS SDK operations [operation_names]:
 
+   **Tools to use**: Read tool for loading source code, no Grep/Glob needed
+
    **Context from Phase 1**:
    - Call chain: [chain from Phase 1]
    - SDK operation: [operation_name from Phase 1] (e.g., DynamoDB PutItem)
    - Functions: [file:line for each function in chain]
 
-   **Strategy**: Classify code into SDK-related (keep) and unrelated (comment out).
+   **Objective**: Classify code into SDK-related (keep) and unrelated (comment out).
+
+   **Criteria**:
+   - SDK-related (KEEP): Code that defines, constructs, or provides data to SDK operation
+   - Unrelated (COMMENT): Code NOT used by SDK operation
 
    **For EACH function in call chain** (entry → intermediate → target):
 
-   Step 1: Load function source code using Read
+   Step 1: Load function source code
+   Use Read tool:
    - File: [function file path from Phase 1]
    - Read entire function body
 
@@ -491,6 +497,8 @@ Keep only SDK-related code, comment out everything else:
 8. **Analyze AWS SDK operation with Task tool** (subagent_type=general-purpose)
    Task prompt: "For function [function_name] at [file_path:line_number] with call chain [selected_chain]:
 
+   **Tools to use**: Read tool for source code, Grep tool for searching patterns
+
    **Context from Phase 1**:
    - SDK operation: [operation_name from Phase 1] (e.g., DynamoDB PutItem)
    - Operation type: [Read/Write/Delete from operation name]
@@ -511,6 +519,8 @@ Keep only SDK-related code, comment out everything else:
 9. **Generate minimal test data with Task tool** (subagent_type=general-purpose)
 
    Task prompt: "For target function [function_name] with AWS SDK operation [operation_name]:
+
+   **Tools to use**: Read tool to extract SDK call parameters
 
    **Context from Phase 1**:
    - Operations in chain: [list from Phase 1] (e.g., [Query, UpdateItem, TransactWriteItems])
@@ -560,9 +570,16 @@ Keep only SDK-related code, comment out everything else:
         - Repeat until compilation succeeds
       - Output: "コンパイル成功: [file_path]"
 
-   C. **Verify Pre-insert code for all Read/Delete operations (MANDATORY)**
+   C. Display completion and proceed to next chain:
+      ```
+      完了 (i/N): テストデータ準備
+      - Pre-insertコード: 追加済み / 不要
+      - コンパイル: 成功
+      ```
 
-   Run the following verification for the processed chain:
+   D. **Verify Pre-insert code for all Read/Delete operations** (verification step)
+
+   Run verification for the processed chain:
 
    1. Search for Read/Delete operations using Grep:
       - Pattern: `client\.(Query|GetItem|GetObject|Scan|DeleteItem|DeleteObject)`
@@ -581,7 +598,6 @@ Keep only SDK-related code, comment out everything else:
 
    4. If all operations have Pre-insert:
       - Output: "検証完了: Pre-insertコード生成済み (N operations)"
-      - Proceed to next chain
 
    Example output:
    ```
@@ -590,15 +606,6 @@ Keep only SDK-related code, comment out everything else:
    - GetItem at gateway.go:234 - Pre-insert: FOUND
    ERROR: Phase 4 incomplete - 1 operation missing Pre-insert code
    ```
-
-   D. Display completion:
-      ```
-      完了 (i/N): テストデータ準備
-      - Pre-insertコード: 追加済み / 不要
-      - コンパイル: 成功
-      ```
-
-   E. Proceed to next chain automatically
 
 11. **Proceed to next chain automatically**
    - If i < N: continue to next chain (repeat from step 6.A)
@@ -631,10 +638,8 @@ Keep only SDK-related code, comment out everything else:
     コンパイル: 成功P個 / 失敗Q個
 
     次のステップ:
-    1. Step 13でAWS環境での動作確認手順を出力
-    2. git diffで変更内容を確認
-    3. AWS環境で検証実行
-    4. 完了後に `git restore .` で変更を戻す
+    1. git diffで変更内容を確認
+    2. AWS環境で検証実行（Step 13の手順を参照）
     ```
 
 13. **Generate AWS verification procedures section**
@@ -852,10 +857,10 @@ Detailed instructions are in Process section above. Key requirements:
 ## Notes
 
 ### Tool Usage
-- Stop immediately if branch diff does not contain `aws-sdk-go-v2` imports
-- Use Task tool for code analysis (steps 2, 3, 6, 8, 9)
-- Use Edit tool to automatically apply code modifications (steps 6, 10)
-- Use Bash tool for compilation verification (steps 6, 10)
+- Bash: Stop immediately if branch diff does not contain `aws-sdk-go-v2` imports
+- Task (subagent_type=general-purpose): Code analysis (steps 2, 3, 6, 8, 9)
+- Edit: Automatically apply code modifications (steps 6, 10)
+- Bash (`go build`): Compilation verification (steps 6, 10)
 
 ### Key Process Steps
 - **Deduplication** (step 3): Group by AWS_service + SDK_operation, ignore parameters. Select shortest chain from each group.
