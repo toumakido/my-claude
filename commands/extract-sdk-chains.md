@@ -527,10 +527,6 @@ Use this command when:
    - Delete操作: Z個 (Pre-insert必要)
    - 統合チェーン: W個 (複数SDK使用)
 
-   検証方法のグループ化ポリシー:
-   - Phase 5の動作確認手順では、実行方法（API/Task）ごとにグループ化して出力
-   - 同じエンドポイント/タスクで確認できる複数の関数は、単一の実行コマンドにまとめて記載
-   - 関数ごとに重複した手順を出力しない
    ```
 
    C. Request batch approval with AskUserQuestion:
