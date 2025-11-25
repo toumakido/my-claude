@@ -24,6 +24,8 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 
 - Run from repository root
 - Working tree can be dirty (uncommitted changes allowed)
+- gh CLI installed and authenticated
+- Git repository with AWS SDK v2 migration changes
 
 ## Process
 
@@ -38,18 +40,18 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    **Context**: Use stored git diff from Step 1
    Task prompt: "Parse git diff and extract all functions/methods using AWS SDK v2 with their call chains.
 
-   **Step 1: Extract SDK functions**
+   **Step 1: Extract SDK functions using Grep**
 
-   Use Grep in this order:
-   1. Search for imports: `github.com/aws/aws-sdk-go-v2/service/*`
-   2. Search for client calls: `client\.(PutItem|GetObject|Query|UpdateItem|DeleteItem|PutObject|GetObject|DeleteObject|SendEmail|Publish)` pattern
-   3. Filter functions with `context.Context` parameter
+   Execute Grep searches in this exact order:
+   1. `pattern: "github\.com/aws/aws-sdk-go-v2/service/"`, `output_mode: "files_with_matches"`
+   2. `pattern: "client\.(PutItem|GetObject|Query|UpdateItem|DeleteItem|PutObject|DeleteObject|SendEmail|Publish)"`, `output_mode: "content"`, `-C: 10`
+   3. Filter results: keep only functions with `context.Context` parameter in signature
 
    For each match, extract:
-   - File path:line_number from diff headers
-   - Function/method name from signature
-   - AWS service from import path (dynamodb, s3, ses, etc.)
-   - Operation from client method name (PutItem, GetObject, etc.)
+   - File path:line_number (from Grep output)
+   - Function/method name (from function signature line)
+   - AWS service (from import path: dynamodb, s3, ses, sns)
+   - Operation (from client method call: PutItem, GetObject, etc.)
 
    **Step 2: Trace call chains**
 
@@ -70,22 +72,27 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
       - If not found: mark function as "SKIP - No entry point"
 
    Call chain tracing (execute after entry point verification):
-   - Trace from verified entry points: `main\(`, `handler\(`, `ServeHTTP`, `Handle`
-   - Search function references to build call paths
+   - Trace from verified entry points using Grep: `pattern: "main\(|handler\(|ServeHTTP|Handle)"`, `output_mode: "content"`
+   - Search function references: `pattern: "<function_name>\("`, `output_mode: "content"`
    - Identify intermediate layers (usecase/service/repository/gateway)
    - Build complete chains: verified_entry → intermediate → SDK function
    - Count all AWS SDK v2 method calls in chain
    - Record all SDK operations for grouped verification
-   - **Parallel execution**: Execute Grep searches in parallel for functions with independent call chains (no shared intermediate layers)
+   - **Parallel execution**: Execute Grep searches in single tool call for functions that:
+     1. Have no shared intermediate layers (different service/repository files)
+     2. Belong to different API endpoints or tasks
+     3. Use different AWS services (e.g., DynamoDB vs S3)
 
-   **Step 3: Verify active callers**
+   **Step 3: Verify active callers (execute in parallel with Step 2)**
 
-   For each extracted function:
-   1. Use Grep to search for function calls (exclude *_test.go, mocks/*.go)
-   2. Count active call sites in production code (handlers, tasks, services)
-   3. If active callers = 0:
+   For each extracted function from Step 1:
+   1. Use Grep: `pattern: "<function_name>\("`, `glob: "!(*_test.go|mocks/*.go)"`, `output_mode: "files_with_matches"`
+   2. Count result files (active call sites in production code)
+   3. If count = 0:
       - Mark as "SKIP - No active callers"
       - Exclude from call chain list
+
+   **Parallel execution note**: Step 3 depends only on Step 1 results (function names). Execute Grep searches for caller verification in parallel with Step 2 call chain tracing to improve performance.
 
    **Step 4: Handle multiple paths**
 
@@ -146,78 +153,42 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    Return: Filtered function list with only actively called functions, all call chains sorted by priority, skipped functions list (including unused implementations)."
 
 3. **Deduplicate chains with coverage-based selection (Task tool)** (subagent_type=general-purpose)
-   Task prompt: "Deduplicate call chains using coverage-based selection to minimize redundant verification:
+   Task prompt: "Deduplicate call chains using coverage-based selection algorithm:
 
-   **Objective**: Select minimum chains that cover all SDK operations. Prioritize chains with multiple SDK operations to reduce total execution count.
+   **Objective**: Select minimum chains covering all unique AWS SDK operations. Prioritize chains with multiple SDK operations.
 
-   Step 1: Sort chains by SDK operation count (descending)
-   - Primary sort: Number of SDK operations (more operations = higher priority)
-   - Secondary sort: Chain length (fewer hops = easier to verify)
-   - Rationale: Chains with multiple SDK operations can verify several migrations in one execution
-
-   Example sorted order:
+   **Algorithm**:
    ```
-   1. ChainB: DynamoDB PutItem + S3 PutObject + SES SendEmail (3 ops, 5 hops)
-   2. ChainD: DynamoDB Query + SNS Publish (2 ops, 3 hops)
-   3. ChainA: DynamoDB PutItem (1 op, 2 hops)
-   4. ChainC: S3 PutObject (1 op, 2 hops)
-   5. ChainE: SES SendEmail (1 op, 4 hops)
-   ```
+   covered_operations = {} (empty set)
+   selected_chains = []
 
-   Step 2: Select chains with coverage tracking
-   Initialize: covered_operations = {} (empty set)
+   1. Sort chains by:
+      - Primary: SDK operation count (descending)
+      - Secondary: Chain length (ascending)
 
-   For each chain in sorted order:
-   1. Extract all SDK operations in chain
-      - Format: "AWS_service + SDK_operation"
-      - Example: ["DynamoDB PutItem", "S3 PutObject", "SES SendEmail"]
+   2. For each chain in sorted order:
+      operations = extract_all_sdk_operations(chain)  // Format: "Service Operation" (e.g., "DynamoDB PutItem")
+      new_operations = operations - covered_operations
 
-   2. Check for new coverage:
-      - new_operations = chain operations NOT in covered_operations
-      - If new_operations is empty: SKIP this chain (all operations already covered)
-      - If new_operations is not empty: SELECT this chain
+      if new_operations is NOT empty:
+         SELECT chain
+         selected_chains.append(chain)
+         covered_operations.update(operations)
+         mark_duplicate_count(chain)  // Add [+N similar chains] marker
+      else:
+         SKIP chain  // All operations already covered
 
-   3. Update covered operations:
-      - Add all chain operations to covered_operations
-      - Mark chain with: [+N similar chains] where N = number of skipped chains covering same operations
+   3. Filter selected chains:
+      For each chain in selected_chains:
+         if chain.entry_point == "SKIP - No entry point":
+            REMOVE chain from selected_chains
 
-   Example execution:
-   ```
-   ChainB (DynamoDB + S3 + SES):
-     new_operations = {DynamoDB PutItem, S3 PutObject, SES SendEmail}
-     → SELECT ✓
-     covered = {DynamoDB PutItem, S3 PutObject, SES SendEmail}
-
-   ChainD (DynamoDB Query + SNS):
-     new_operations = {DynamoDB Query, SNS Publish}
-     → SELECT ✓
-     covered = {DynamoDB PutItem, S3 PutObject, SES SendEmail, DynamoDB Query, SNS Publish}
-
-   ChainA (DynamoDB PutItem):
-     new_operations = {} (already in covered)
-     → SKIP (covered by ChainB)
-
-   ChainC (S3 PutObject):
-     new_operations = {} (already in covered)
-     → SKIP (covered by ChainB)
-
-   ChainE (SES SendEmail):
-     new_operations = {} (already in covered)
-     → SKIP (covered by ChainB)
-
-   Result: ChainB [+2 similar chains], ChainD
+   4. Return:
+      - selected_chains (optimal combination)
+      - skipped_chains with reasons
    ```
 
-   Step 3: Verify entry points
-   Use entry point verification results from Phase 1 Step 2. For each selected chain:
-   1. Check entry point status from Phase 1 results
-   2. If marked as "SKIP - No entry point": exclude from optimal combination
-
-   Step 4: Handle same-operation chains with different parameters
-   When multiple chains use same SDK operation but with different parameters:
-   - Example: DynamoDB Query with different FilterExpressions
-   - Group by exact SDK operation signature if parameters affect behavior
-   - Otherwise treat as same operation (parameters like table names, filters don't affect SDK v2 migration verification)
+   **Operation comparison**: Treat operations as identical if Service + Operation name match. Ignore parameters (table names, filters) as they don't affect SDK v2 migration verification.
 
    Return: optimal combination (deduplicated chains with verified entry points), skipped chains list with skip reasons"
 
@@ -335,11 +306,25 @@ Keep only SDK-related code, comment out everything else:
    - SDK operation: [operation_name from Phase 1] (e.g., DynamoDB PutItem)
    - Functions: [file:line for each function in chain]
 
-   **Objective**: Classify code into SDK-related (keep) and unrelated (comment out).
+   **Objective**: Classify code into SDK-related (KEEP) and unrelated (COMMENT).
 
-   **Criteria**:
-   - SDK-related (KEEP): Code that defines, constructs, or provides data to SDK operation
-   - Unrelated (COMMENT): Code NOT used by SDK operation
+   **Classification criteria**:
+
+   SDK-related code (KEEP) - Code that directly contributes to SDK operation input:
+   1. SDK client initialization (e.g., `dynamodb.New()`, `s3.NewFromConfig()`)
+   2. SDK input struct construction (e.g., `&dynamodb.PutItemInput{...}`)
+   3. Data transformation for SDK input (e.g., `buildItem()`, `marshalMap()`)
+   4. Variables/parameters used in SDK input fields
+   5. Context handling for SDK calls (e.g., `ctx` parameter)
+   6. Error handling for SDK responses (e.g., `if err != nil` after SDK call)
+
+   Unrelated code (COMMENT) - Code NOT used by SDK operation:
+   1. Logging statements (e.g., `logger.Info()`, `log.Printf()`)
+   2. Metrics/monitoring (e.g., `metrics.Increment()`)
+   3. External service calls (e.g., `userRepo.Get()`, HTTP requests)
+   4. Validation logic not related to SDK input
+   5. Business logic after SDK operation completes
+   6. Cache operations (e.g., `cache.Set()`, `cache.Get()`)
 
    **For EACH function in call chain** (entry → intermediate → target):
 
@@ -396,17 +381,7 @@ Keep only SDK-related code, comment out everything else:
    - Lines P-Q: [description]
    ```"
 
-   C. **Verify Step B identified code blocks (optional sanity check)**
-
-   Quick verification that Step B produced actionable results:
-
-   1. Check Step B output:
-      - If "Code blocks to COMMENT" sections are empty for ALL functions: Output "検証: コメントアウトするコードなし"
-      - If at least one "Code blocks to COMMENT" section has entries: Output "検証完了: コメントアウト対象 N個"
-
-   2. Proceed to Step D (no halting condition)
-
-   D. **Apply comment-out modifications with Edit tool**
+   C. **Apply comment-out modifications with Edit tool**
 
    Check Step B result and apply modifications:
 
@@ -417,19 +392,19 @@ Keep only SDK-related code, comment out everything else:
    2. If Step B identified one or more code blocks to comment out:
       - For each function in call chain (entry → target):
         - For each code block marked as COMMENT:
-          - Use Edit tool to comment out the block
-          - Add simple comment: `// Commented out for testing: Unrelated to SDK operation`
-          - Use `//` line comments for all lines
+          - Use Edit tool: Replace block with commented version
+          - Format: Prefix marker line + comment out all lines with `//`
+          - Marker: `// Commented out for testing: Unrelated to SDK operation`
 
-   Example:
+   Example Edit tool usage:
    ```go
-   // Original:
+   old_string:
    userData, err := h.userRepo.GetUser(ctx, userID)
    if err != nil {
        return err
    }
 
-   // Modified:
+   new_string:
    // Commented out for testing: Unrelated to SDK operation
    // userData, err := h.userRepo.GetUser(ctx, userID)
    // if err != nil {
@@ -442,7 +417,7 @@ Keep only SDK-related code, comment out everything else:
       コメントアウト完了: [function_name] [file:line] (N blocks)
       ```
 
-   E. **Replace commented-out code with dummy values if needed**
+   D. **Replace commented-out code with dummy values if needed**
 
    Only if commented code returns values that cause compilation errors:
 
@@ -462,7 +437,7 @@ Keep only SDK-related code, comment out everything else:
 
    Skip if commented code has no return values or values are unused
 
-   F. **Verify compilation after modifications**
+   E. **Verify compilation after modifications**
       - Run: `go build -o /tmp/test-build 2>&1`
       - If compilation fails:
         - Analyze error: unused variables, undefined references
@@ -470,15 +445,13 @@ Keep only SDK-related code, comment out everything else:
         - Retry until compilation succeeds
       - Output: "コンパイル成功: [file_path]"
 
-   G. Display completion:
+   F. Display completion and proceed to next chain:
    ```
    完了 (i/N): コメントアウト処理
    - 処理した関数数: X個
    - コメントアウトしたブロック数: Y個
    - コンパイル: 成功
    ```
-
-   H. Proceed to next chain automatically
 
 ### Phase 4: Simplified Test Data Preparation
 
@@ -508,10 +481,10 @@ Keep only SDK-related code, comment out everything else:
      - Delete: DeleteItem, DeleteObject
    - Function location: [file:line from Phase 1]
 
-   1. Extract AWS settings from [function_name] using Read:
-      - Region: look for `WithRegion\|AWS_REGION`
-      - Resource: table name, bucket name from client call parameters
-      - Endpoint: look for `WithEndpointResolver\|endpoint`
+   1. Extract AWS settings from [function_name] using Read and Grep:
+      - Region: Use Grep with `pattern: "WithRegion|AWS_REGION"`, `output_mode: "content"`, `-C: 5`
+      - Resource: Read SDK call parameters for table name, bucket name
+      - Endpoint: Use Grep with `pattern: "WithEndpointResolver|endpoint"`, `output_mode: "content"`, `-C: 5`
 
    2. Document v1 → v2 changes from git diff:
       - Client init: session.New vs config.LoadDefaultConfig
@@ -586,27 +559,21 @@ Keep only SDK-related code, comment out everything else:
       - コンパイル: 成功
       ```
 
-   D. **Verify Pre-insert code for all Update/Read/Delete operations** (verification step)
+   D. **Verify Pre-insert code for all Update/Read/Delete operations**
 
-   Run verification for the processed chain:
+   Verify Pre-insert code was generated for operations requiring existing data:
 
-   1. Search for Update/Read/Delete operations using Grep:
-      - Pattern: `client\.(UpdateItem|TransactWriteItems|Query|GetItem|GetObject|Scan|DeleteItem|DeleteObject)`
-      - In files: processed chain files only
+   1. Use Grep to search for Update/Read/Delete operations:
+      - `pattern: "client\.(UpdateItem|TransactWriteItems|Query|GetItem|GetObject|Scan|DeleteItem|DeleteObject)"`, `output_mode: "content"`, `-B: 20`
+      - `path: [processed chain file paths]`
 
-   2. For each Update/Read/Delete operation found:
-      - Check lines before operation (within 20 lines)
-      - Search for Pre-insert code patterns:
-        - Comment: `// Pre-insert test data`
-        - Code: `PutItem.*Input` or `PutObject.*Input`
+   2. For each Update/Read/Delete operation in results:
+      - Check preceding 20 lines (from Grep -B output)
+      - Search for Pre-insert patterns: `// Pre-insert test data`, `PutItem.*Input`, `PutObject.*Input`
 
-   3. If Pre-insert missing for any operation:
-      - List operations without Pre-insert
-      - ERROR: "Phase 4 incomplete - Pre-insert code missing"
-      - HALT processing for this chain
-
-   4. If all operations have Pre-insert:
-      - Output: "検証完了: Pre-insertコード生成済み (N operations)"
+   3. Verification results:
+      - All operations have Pre-insert → Output: "検証完了: Pre-insertコード生成済み (N operations)"
+      - Missing Pre-insert → ERROR: "Phase 4 incomplete - Pre-insert code missing", HALT processing
 
    Example output:
    ```
@@ -617,8 +584,8 @@ Keep only SDK-related code, comment out everything else:
    ERROR: Phase 4 incomplete - 1 operation missing Pre-insert code
    ```
 
-11. **Proceed to next chain automatically**
-   - If i < N: continue to next chain (repeat from step 6.A)
+11. **Automatic progression**
+   - If i < N: continue to next chain (repeat from step 7.A)
    - If i = N: proceed to Phase 5
 
 ### Phase 5: Final Summary
@@ -648,9 +615,6 @@ Keep only SDK-related code, comment out everything else:
 
     コンパイル: 成功P個 / 失敗Q個
 
-    次のステップ:
-    1. git diffで変更内容を確認
-    2. AWS環境で検証実行（Step 13の手順を参照）
     ```
 
 13. **Generate AWS verification procedures section**
