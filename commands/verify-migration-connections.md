@@ -81,93 +81,62 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    - 重複排除で最優先: 統合チェーンで複数の操作種別をカバーできる場合、単一操作チェーンは排除
    - 例: 統合ChainがQuery + UpdateItem + PutItemをカバーする場合、個別のQuery専用Chain、UpdateItem専用Chainは重複として排除
 
-   **Step 4: Verify active usage (3段階検証)**
+   **Step 4: Verify call chain validity (optional false positive check)**
 
-   CRITICAL: This step must be executed for EVERY function extracted in Step 2 to prevent unused functions from being included.
+   NOTE: Since Step 2 builds call chains FROM entry points, functions unreachable from entry points are automatically excluded. This step only handles edge cases.
 
-   **4-1. Direct call site verification (実行必須):**
+   **When to execute Step 4:**
+   - Only if Step 2 extracted functions that might be false positives
+   - Example: Multiple types have same method name (e.g., `Save()` exists on both UserRepo and OrderRepo)
 
-   For each function from Step 2:
-   1. Identify function signature:
-      - Regular function: `func FunctionName(`
-      - Method: `func (receiver Type) MethodName(` → Extract receiver type
+   **4-1. Verify receiver type for methods (false positive check):**
 
-   2. Search for direct calls in production code:
-      - Regular function: `pattern: "FunctionName\\("`, `glob: "!(*_test.go|mocks/*.go|*_mock.go)"`, `output_mode: "files_with_matches"`
-      - Method: `pattern: "\\.MethodName\\("`, `glob: "!(*_test.go|mocks/*.go|*_mock.go)"`, `output_mode: "content"`, `-B: 5`
+   For each method in extracted chains:
+   1. Identify receiver type from function definition:
+      - Example: `func (r *userRepo) Save(` → receiver type is `*userRepo`
 
-   3. Verify receiver type (for methods only):
-      - Check if call site matches receiver type from function definition
-      - Example: If function is `func (r *repo) Save(`, verify call site uses `*repo` type
-      - Use grep pattern: `pattern: "receiver_type\\)"` in the -B context lines
+   2. Search for calls in call chain context:
+      - Use grep with `-B: 5` to see variable declaration
+      - Check if variable type matches receiver type
 
-   4. Count valid call sites (exclude false positives from other types with same method name)
-
-   5. If count = 0:
-      - Mark as "SKIP - No active callers"
-      - Log: `Excluded: [file:line] [function_name] - No active callers in production code`
-      - Exclude from call chain list immediately
-      - Do NOT proceed to 4-2 or 4-3
-
-   **4-2. Interface implementation verification (メソッドの場合のみ実行):**
-
-   Execute ONLY if:
-   - Function is a method (has receiver)
-   - 4-1 found zero direct calls
-   - Method name suggests interface implementation (e.g., Get, Save, Update, Delete)
-
-   Steps:
-   1. Search for interface definitions containing this method:
-      `pattern: "type .* interface\\{[\\s\\S]*?MethodName\\([\\s\\S]*?\\}"`, `multiline: true`, `output_mode: "content"`
-
-   2. For each interface found, search for interface usage:
-      `pattern: "interfaceName"`, `glob: "!(*_test.go|mocks/*.go)"`, `output_mode: "content"`, `-C: 10`
-
-   3. Verify concrete type is used:
-      - Check if receiver type is assigned to interface variable
-      - Example: `var repo Repository = &concreteRepo{}` or `NewRepository() Repository { return &concreteRepo{} }`
-
-   4. Verify method is actually invoked on interface:
-      `pattern: "repo\\.MethodName\\("`, check if repo variable type matches interface
-
-   5. If NO valid interface usage found:
-      - Mark as "SKIP - Interface method never called"
-      - Log: `Excluded: [file:line] [Type.MethodName] - Defined but not used via interface`
+   3. If receiver type doesn't match:
+      - Mark as "SKIP - Wrong receiver type (false positive)"
+      - Log: `Excluded: [file:line] [Type.MethodName] - Call site uses different type`
       - Exclude from call chain list
 
-   **4-3. Entry point reachability check (呼び出しが見つかった関数のみ実行):**
+   **4-2. Verify interface method usage (for interface-based calls):**
 
-   Execute ONLY if 4-1 or 4-2 found active callers.
+   Execute ONLY if call site uses interface type instead of concrete type.
 
-   Verify function is reachable from valid entry points (from Step 1):
-   1. Build call graph from entry points to this function:
-      - Start from entry points (API/Task/CLI) identified in Step 1
-      - Trace function calls recursively until reaching target function
-      - Use Grep to search for each intermediate function call
+   Steps:
+   1. Identify interface usage in call chain:
+      - Example: `var repo Repository = newUserRepo()` then `repo.Save()`
 
-   2. Exclude if only reachable from:
-      - Test code paths: Check if all paths go through `*_test.go` files
-      - Feature-flagged disabled code: Search for `if featureFlag.Enabled()` with flag set to false
-      - Deprecated code: Search for `// Deprecated` comments in caller chain
+   2. Verify concrete type implements interface:
+      - Check receiver type matches interface method signature
 
-   3. If NOT reachable from any valid entry point:
-      - Mark as "SKIP - Not reachable from entry points"
-      - Log: `Excluded: [file:line] [function_name] - Only called from test/deprecated code`
+   3. If concrete type doesn't implement interface:
+      - Mark as "SKIP - Interface mismatch"
       - Exclude from call chain list
 
    **Verification summary:**
-   After Step 4, output:
+   After Step 4, output (only if exclusions occurred):
    ```
-   Active functions: N個
-   Excluded functions:
-   - No active callers: X個
-   - Interface method never called: Y個
-   - Not reachable from entry points: Z個
+   Excluded false positives:
+   - Wrong receiver type: X個
+   - Interface mismatch: Y個
 
-   Detailed exclusion list:
    [file:line] [function_name] - [reason]
    ...
    ```
+
+   **Key insight:**
+   Entry point → Call chain tracing automatically excludes:
+   - Functions with no callers (never found during tracing)
+   - Functions unreachable from entry points (tracing stops before reaching them)
+   - Test-only functions (excluded by starting from production entry points)
+
+   No separate reachability check needed.
 
    **Step 5: Handle multiple paths**
 
@@ -212,6 +181,9 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 
    **Format for single SDK operation:**
    ```
+   Chain: [entry_type] [identifier]
+
+   Entry → Complete call chain:
    Entry: [type] [identifier]
    → [file:line] EntryFunction
    → [file:line] IntermediateFunction1
@@ -222,11 +194,14 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 
    Example (single SDK operation):
    ```
+   Chain: Task task_name
+
+   Entry → Complete call chain:
    Entry: Task task_name
-   → cmd/task_name/main.go:100 main
-   → internal/tasks/task_worker.go:50 Execute
-   → internal/service/service_name.go:80 ProcessData
-   → DynamoDB UpdateItem
+   → cmd/task_name/main.go:100 main()
+   → internal/tasks/task_worker.go:50 Execute()
+   → internal/service/service_name.go:80 ProcessData()
+   → internal/service/service_name.go:85 db.UpdateItem()  ← DynamoDB UpdateItem
    ```
 
    Example (multiple SDK operations with hierarchical structure):
@@ -337,11 +312,11 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    ```
    [N]. Chain: [entry_type] [identifier]
 
+   Entry → Complete call chain:
    Entry: [type] [identifier]
    → [file:line] EntryFunction
    → [file:line] IntermediateFunction
-   → [file:line] SDKFunction
-   → [Service] [Operation]
+   → [file:line] SDKFunction  ← [Service] [Operation]
 
    (1 SDK operation, [hop_count] hops) Active callers: [count]箇所
    ```
@@ -369,11 +344,12 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    ```
    1. Chain: Task task_name
 
+   Entry → Complete call chain:
    Entry: Task task_name
-   → cmd/task_name/main.go:100 main
-   → internal/tasks/task_worker.go:50 Execute
-   → internal/service/service_name.go:80 ProcessData
-   → DynamoDB UpdateItem
+   → cmd/task_name/main.go:100 main()
+   → internal/tasks/task_worker.go:50 Execute()
+   → internal/service/service_name.go:80 ProcessData()
+   → internal/service/service_name.go:85 db.UpdateItem()  ← DynamoDB UpdateItem
 
    (1 SDK operation, 4 hops) Active callers: 3箇所
    ```
@@ -1149,21 +1125,23 @@ After Phase 3, verify all unrelated code is commented out:
 
 3. 単一操作Chain: Task task_name_2 [+2 other chains]
 
+   Entry → Complete call chain:
    Entry: Task task_name_2
-   → cmd/task_name_2/main.go:50 main
-   → internal/usecase/usecase_name.go:30 Execute
-   → internal/repository/repository_name.go:45 Save
-   → DynamoDB PutItem
+   → cmd/task_name_2/main.go:50 main()
+   → internal/usecase/usecase_name.go:30 Execute()
+   → internal/repository/repository_name.go:45 Save()
+   → internal/repository/repository_name.go:48 db.PutItem()  ← DynamoDB PutItem
 
-   (1 SDK operation, 3 hops) Active callers: 3箇所
+   (1 SDK operation, 4 hops) Active callers: 3箇所
 
 4. 単一操作Chain: API GET /v1/resource/:id
 
+   Entry → Complete call chain:
    Entry: API GET /v1/resource/:id
-   → internal/api/handler/v1/handler_name.go:100 GetResource
-   → internal/service/service_name.go:50 Fetch
-   → internal/repository/repository_name.go:89 Get
-   → DynamoDB GetItem
+   → internal/api/handler/v1/handler_name.go:100 GetResource()
+   → internal/service/service_name.go:50 Fetch()
+   → internal/repository/repository_name.go:89 Get()
+   → internal/repository/repository_name.go:92 db.GetItem()  ← DynamoDB GetItem
 
    (1 SDK operation, 4 hops) Active callers: 2箇所
 ```
