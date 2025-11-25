@@ -15,7 +15,6 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 1. Review `git diff`
 2. Deploy to AWS test environment
 3. Execute verification procedures (Step 13 output)
-4. Run `git restore .` to revert changes
 
 **Critical notes:**
 - Modifies production code in working tree (not automatically reverted)
@@ -641,7 +640,6 @@ Keep only SDK-related code, comment out everything else:
     次のステップ:
     1. git diffで変更内容を確認
     2. AWS環境で検証実行（Step 13の手順を参照）
-    3. 完了後に `git restore .` で変更を戻す
     ```
 
 13. **Generate AWS verification procedures section**
