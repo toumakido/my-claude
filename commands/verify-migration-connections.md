@@ -238,9 +238,15 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    - 複数SDK使用: W個
 
    処理対象のチェーン:
-   1. [file:line] | [function] | [operations] [markers]
-   2. [file:line] | [function] | [operations] [markers]
-   ...
+   1. [Entry Point]
+      → [Handler/Task file:line] HandlerMethod
+      → [Service file:line] ServiceMethod
+      → [Target file:line] TargetFunction
+      → AWS SDK v2 API (Operation)
+   2. [Next Entry Point]
+      → [file:line] Method
+      → ...
+      → AWS SDK v2 API (Operation)
 
    検証方法のグループ化ポリシー:
    - Phase 4の動作確認手順では、実行方法（API/Task）ごとにグループ化して出力
@@ -741,11 +747,18 @@ Keep only SDK-related code, comment out everything else:
 - 複数SDK使用: 2個
 
 処理対象のチェーン:
-1. order.go:120 | Process | DynamoDB + S3 + SES [★]
-2. data.go:89 | Import | S3 + DynamoDB [★] [+1]
-3. user.go:45 | Save | DynamoDB [+2]
-4. s3.go:120 | Upload | S3
-5. user.go:89 | Get | DynamoDB
+1. POST /v1/orders
+   → internal/api/handler/v1/order_handler.go:50 PostOrder
+   → internal/service/order.go:120 Process
+   → DynamoDB PutItem → S3 PutObject → SES SendEmail
+2. POST /v1/data/import
+   → internal/api/handler/v1/data_handler.go:80 Import
+   → internal/gateway/data.go:89 Import
+   → S3 GetObject → DynamoDB BatchWriteItem
+3. main
+   → internal/usecase/user.go:30 Create
+   → internal/repository/user.go:45 Save
+   → DynamoDB PutItem
 ```
 
 ### Comment-out Summary (Phase 3)
