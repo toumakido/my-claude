@@ -247,24 +247,24 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 
    Example (multiple SDK operations with hierarchical structure):
    ```
-   統合Chain: Task batch_task [★ Multiple SDK: 4 operations]
+   統合Chain: Task integrated_task [★ Multiple SDK: 4 operations]
 
    Entry → Intermediate layers (共通):
-   Entry: Task batch_task
-   → cmd/batch_task/main.go:136 main()
-   → internal/tasks/batch_worker.go:40 Execute()
+   Entry: Task integrated_task
+   → cmd/integrated_task/main.go:136 main()
+   → internal/tasks/worker.go:40 Execute()
 
    SDK Functions (個別):
-   A. internal/tasks/batch_worker.go:41 → internal/service/entity_datastore.go:79 GetByIndex() → internal/service/entity_datastore.go:105 db.Query()
+   A. internal/tasks/worker.go:41 → internal/service/datastore.go:79 GetByIndex() → internal/service/datastore.go:105 db.Query()
       Operation: DynamoDB Query
 
-   B. internal/tasks/batch_worker.go:134 → internal/service/counter.go:37 GetNext() → internal/service/counter.go:60 db.UpdateItem()
+   B. internal/tasks/worker.go:134 → internal/service/counter.go:37 GetNext() → internal/service/counter.go:60 db.UpdateItem()
       Operation: DynamoDB UpdateItem (×2)
 
-   C. internal/tasks/batch_worker.go:167 → internal/service/file_storage.go:235 insertRecord() → internal/service/file_storage.go:254 db.PutItem()
+   C. internal/tasks/worker.go:167 → internal/service/storage.go:235 InsertRecord() → internal/service/storage.go:254 db.PutItem()
       Operation: DynamoDB PutItem (×2)
 
-   D. internal/tasks/batch_worker.go:116 → internal/service/entity_datastore.go:421 Update() → internal/service/entity_datastore.go:519 db.TransactWriteItems()
+   D. internal/tasks/worker.go:116 → internal/service/datastore.go:421 Update() → internal/service/datastore.go:519 db.TransactWriteItems()
       Operation: DynamoDB TransactWriteItems
    ```
 
@@ -278,31 +278,31 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 
    BAD example (ambiguous entry point - FORBIDDEN):
    ```
-   Chain: AccountTransferDatastore.GetAccountTransfer
+   Chain: DatastoreService.GetRecord
 
    Entry → Complete call chain:
    Entry: API (various handlers)  ← 曖昧、禁止
-   → internal/service/account_transfer_datastore.go:55 GetAccountTransfer()
-   → internal/service/account_transfer_datastore.go:67 db.GetItem()
+   → internal/service/datastore.go:55 GetRecord()
+   → internal/service/datastore.go:67 db.GetItem()
    ```
 
    GOOD example (specific API endpoint - REQUIRED):
    ```
-   Chain: API GET /v1/account-transfer/:id
+   Chain: API GET /v1/records/:id
 
    Entry → Complete call chain:
-   Entry: API GET /v1/account-transfer/:id
-   → internal/api/handler/v1/account_transfer.go:50 GetAccountTransfer()  ← ハンドラー明示
-   → internal/service/account_transfer_datastore.go:55 GetAccountTransfer()
-   → internal/service/account_transfer_datastore.go:67 db.GetItem()
+   Entry: API GET /v1/records/:id
+   → internal/api/handler/v1/record.go:50 GetRecord()  ← ハンドラー明示
+   → internal/service/datastore.go:55 GetRecord()
+   → internal/service/datastore.go:67 db.GetItem()
    ```
 
    If entry point cannot be determined (must be excluded):
    ```
    スキップされた関数（エントリーポイント不明）:
-   - internal/service/account_transfer_datastore.go:55 GetAccountTransfer - No API endpoint
-   - internal/service/dir_file.go:71 GetBindingResult - No API endpoint
-   - internal/service/dir_file.go:283 UnbindSmartplusAccountWithFile - No API endpoint
+   - internal/service/datastore.go:55 GetRecord - No API endpoint
+   - internal/service/file_service.go:71 GetRelatedData - No API endpoint
+   - internal/service/file_service.go:283 RemoveAssociation - No API endpoint
    ```
 
    **Validation**: After Task tool completes, verify output includes:
@@ -543,27 +543,27 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 
    **Example (multiple SDK operations with complete details):**
    ```
-   3. Chain: Task batch_task [★ Multiple SDK: 4 operations]
+   3. Chain: Task integrated_task [★ Multiple SDK: 4 operations]
 
    Entry → Complete call chain:
-   Entry: Task batch_task
-   → cmd/batch_task/main.go:136 main()
-   → internal/tasks/batch_worker.go:40 Execute()
-   → internal/tasks/batch_worker.go:41 dataRepo.GetByIndex()     [External: None]
-   → internal/service/entity_datastore.go:79 GetByIndex()
-   → internal/service/entity_datastore.go:105 db.Query()         ← DynamoDB Query
+   Entry: Task integrated_task
+   → cmd/integrated_task/main.go:136 main()
+   → internal/tasks/worker.go:40 Execute()
+   → internal/tasks/worker.go:41 dataRepo.GetByIndex()     [External: None]
+   → internal/service/datastore.go:79 GetByIndex()
+   → internal/service/datastore.go:105 db.Query()         ← DynamoDB Query
 
-   → internal/tasks/batch_worker.go:134 counterRepo.GetNext()   [External: None]
+   → internal/tasks/worker.go:134 counterRepo.GetNext()   [External: None]
    → internal/service/counter.go:37 GetNext()
    → internal/service/counter.go:60 db.UpdateItem()              ← DynamoDB UpdateItem (×2)
 
-   → internal/tasks/batch_worker.go:167 fileRepo.Insert()       [External: None]
-   → internal/service/file_storage.go:235 insertRecord()
-   → internal/service/file_storage.go:254 db.PutItem()          ← DynamoDB PutItem (×2)
+   → internal/tasks/worker.go:167 fileRepo.Insert()       [External: None]
+   → internal/service/storage.go:235 InsertRecord()
+   → internal/service/storage.go:254 db.PutItem()          ← DynamoDB PutItem (×2)
 
-   → internal/tasks/batch_worker.go:116 dataRepo.Update()       [External: None]
-   → internal/service/entity_datastore.go:421 Update()
-   → internal/service/entity_datastore.go:519 db.TransactWriteItems() ← DynamoDB TransactWriteItems
+   → internal/tasks/worker.go:116 dataRepo.Update()       [External: None]
+   → internal/service/datastore.go:421 Update()
+   → internal/service/datastore.go:519 db.TransactWriteItems() ← DynamoDB TransactWriteItems
 
    SDK Operations Summary:
    - DynamoDB Query (Read): Requires Pre-insert
@@ -1300,66 +1300,66 @@ After Phase 3, verify all unrelated code is commented out by executing Grep sear
 
 [Sorted by priority: 統合チェーン (4+ operations) first, then 中規模チェーン (2-3 operations), then 単一操作チェーン]
 
-1. 統合Chain: Task task_name_1 [★ Multiple SDK: 3 operations]
+1. 統合Chain: Task integrated_task_a [★ Multiple SDK: 3 operations]
 
    Entry → Intermediate layers (共通):
-   Entry: Task task_name_1
-   → cmd/task_name_1/main.go:100 main
-   → internal/tasks/task_worker.go:50 Execute
-   → internal/service/service_name.go:80 ProcessData
+   Entry: Task integrated_task_a
+   → cmd/integrated_task_a/main.go:100 main
+   → internal/tasks/worker.go:50 Execute
+   → internal/service/processor.go:80 ProcessData
 
    SDK Functions (個別):
-   1-A. internal/service/service_name.go:120 createRecord()
-        → internal/service/service_name.go:125 db.PutItem()
+   1-A. internal/service/processor.go:120 CreateRecord()
+        → internal/service/processor.go:125 db.PutItem()
         Operation: DynamoDB PutItem
 
-   1-B. internal/service/service_name.go:150 storeFile()
+   1-B. internal/service/processor.go:150 StoreFile()
         → internal/storage/s3_client.go:45 client.PutObject()
         Operation: S3 PutObject
 
-   1-C. internal/service/service_name.go:180 sendMessage()
+   1-C. internal/service/processor.go:180 SendNotification()
         → internal/notification/email.go:30 client.SendEmail()
         Operation: SES SendEmail
 
    (3 SDK operations, 5 hops) Active callers: 2箇所
 
-2. 中規模Chain: POST /v1/resource/action [★ Multiple SDK: 2 operations] [+1 other chain]
+2. 中規模Chain: POST /v1/resources/process [★ Multiple SDK: 2 operations] [+1 other chain]
 
    Entry → Intermediate layers (共通):
-   Entry: API POST /v1/resource/action
-   → internal/api/handler/v1/handler_name.go:80 HandleAction
-   → internal/gateway/gateway_name.go:89 ProcessAction
+   Entry: API POST /v1/resources/process
+   → internal/api/handler/v1/resource.go:80 HandleProcess
+   → internal/gateway/resource_gateway.go:89 ProcessResource
 
    SDK Functions (個別):
-   2-A. internal/gateway/gateway_name.go:120 fetchData()
+   2-A. internal/gateway/resource_gateway.go:120 FetchData()
         → internal/storage/s3_gateway.go:67 client.GetObject()
         Operation: S3 GetObject
 
-   2-B. internal/gateway/gateway_name.go:200 saveBatch()
+   2-B. internal/gateway/resource_gateway.go:200 SaveBatch()
         → internal/repository/batch_repo.go:123 client.BatchWriteItem()
         Operation: DynamoDB BatchWriteItem
 
    (2 SDK operations, 4 hops) Active callers: 1箇所
 
-3. 単一操作Chain: Task task_name_2 [+2 other chains]
+3. 単一操作Chain: Task simple_task_a [+2 other chains]
 
    Entry → Complete call chain:
-   Entry: Task task_name_2
-   → cmd/task_name_2/main.go:50 main()
-   → internal/usecase/usecase_name.go:30 Execute()
-   → internal/repository/repository_name.go:45 Save()
-   → internal/repository/repository_name.go:48 db.PutItem()  ← DynamoDB PutItem
+   Entry: Task simple_task_a
+   → cmd/simple_task_a/main.go:50 main()
+   → internal/usecase/processor.go:30 Execute()
+   → internal/repository/data_repo.go:45 Save()
+   → internal/repository/data_repo.go:48 db.PutItem()  ← DynamoDB PutItem
 
    (1 SDK operation, 4 hops) Active callers: 3箇所
 
-4. 単一操作Chain: API GET /v1/resource/:id
+4. 単一操作Chain: API GET /v1/resources/:id
 
    Entry → Complete call chain:
-   Entry: API GET /v1/resource/:id
-   → internal/api/handler/v1/handler_name.go:100 GetResource()
-   → internal/service/service_name.go:50 Fetch()
-   → internal/repository/repository_name.go:89 Get()
-   → internal/repository/repository_name.go:92 db.GetItem()  ← DynamoDB GetItem
+   Entry: API GET /v1/resources/:id
+   → internal/api/handler/v1/resource.go:100 GetResource()
+   → internal/service/resource_service.go:50 Fetch()
+   → internal/repository/resource_repo.go:89 Get()
+   → internal/repository/resource_repo.go:92 db.GetItem()  ← DynamoDB GetItem
 
    (1 SDK operation, 4 hops) Active callers: 2箇所
 ```
@@ -1377,21 +1377,21 @@ After Phase 3, verify all unrelated code is commented out by executing Grep sear
 
 処理対象のチェーン:
 
-1. 統合Chain: Task task_name_1 [★ Multiple SDK: 3 operations]
+1. 統合Chain: Task integrated_task_a [★ Multiple SDK: 3 operations]
 
    Entry → Complete call chain:
-   Entry: Task task_name_1
-   → cmd/task_name_1/main.go:100 main()
-   → internal/tasks/task_worker.go:50 Execute()
-   → internal/service/service_name.go:80 ProcessData()
+   Entry: Task integrated_task_a
+   → cmd/integrated_task_a/main.go:100 main()
+   → internal/tasks/worker.go:50 Execute()
+   → internal/service/processor.go:80 ProcessData()
 
-   → internal/service/service_name.go:120 createRecord()        [External: None]
-   → internal/service/service_name.go:125 db.PutItem()          ← DynamoDB PutItem
+   → internal/service/processor.go:120 CreateRecord()        [External: None]
+   → internal/service/processor.go:125 db.PutItem()          ← DynamoDB PutItem
 
-   → internal/service/service_name.go:150 storeFile()           [External: None]
+   → internal/service/processor.go:150 StoreFile()           [External: None]
    → internal/storage/s3_client.go:45 client.PutObject()        ← S3 PutObject
 
-   → internal/service/service_name.go:180 sendMessage()         [External: None]
+   → internal/service/processor.go:180 SendNotification()         [External: None]
    → internal/notification/email.go:30 client.SendEmail()       ← SES SendEmail
 
    SDK Operations Summary:
@@ -1402,17 +1402,17 @@ After Phase 3, verify all unrelated code is commented out by executing Grep sear
    External Dependencies: None
    Estimated complexity: Low (3 operations, 0 external deps)
 
-2. 中規模Chain: POST /v1/resource/action [★ Multiple SDK: 2 operations]
+2. 中規模Chain: POST /v1/resources/process [★ Multiple SDK: 2 operations]
 
    Entry → Complete call chain:
-   Entry: API POST /v1/resource/action
-   → internal/api/handler/v1/handler_name.go:80 HandleAction()
-   → internal/gateway/gateway_name.go:89 ProcessAction()
+   Entry: API POST /v1/resources/process
+   → internal/api/handler/v1/resource.go:80 HandleProcess()
+   → internal/gateway/resource_gateway.go:89 ProcessResource()
 
-   → internal/gateway/gateway_name.go:120 fetchData()           [External: None]
+   → internal/gateway/resource_gateway.go:120 FetchData()           [External: None]
    → internal/storage/s3_gateway.go:67 client.GetObject()       ← S3 GetObject
 
-   → internal/gateway/gateway_name.go:200 saveBatch()           [External: None]
+   → internal/gateway/resource_gateway.go:200 SaveBatch()           [External: None]
    → internal/repository/batch_repo.go:123 client.BatchWriteItem() ← DynamoDB BatchWriteItem
 
    SDK Operations Summary:
@@ -1422,35 +1422,35 @@ After Phase 3, verify all unrelated code is commented out by executing Grep sear
    External Dependencies: None
    Estimated complexity: Medium (2 operations, 0 external deps)
 
-3. 単一操作Chain: Task task_name_2
+3. 単一操作Chain: Task simple_task_a
 
    Entry → Complete call chain:
-   Entry: Task task_name_2
-   → cmd/task_name_2/main.go:50 main()
-   → internal/usecase/usecase_name.go:30 Execute()              [External: None]
-   → internal/repository/repository_name.go:45 Save()
-   → internal/repository/repository_name.go:48 db.PutItem()     ← DynamoDB PutItem
+   Entry: Task simple_task_a
+   → cmd/simple_task_a/main.go:50 main()
+   → internal/usecase/processor.go:30 Execute()              [External: None]
+   → internal/repository/data_repo.go:45 Save()
+   → internal/repository/data_repo.go:48 db.PutItem()     ← DynamoDB PutItem
 
    SDK Operation:
    - Type: Create
-   - Resource: entities_table
+   - Resource: table_a
    - Pre-insert required: No
 
    External Dependencies: None
    Estimated complexity: Low (1 operation, 0 external deps)
 
-4. 単一操作Chain: API GET /v1/resource/:id
+4. 単一操作Chain: API GET /v1/resources/:id
 
    Entry → Complete call chain:
-   Entry: API GET /v1/resource/:id
-   → internal/api/handler/v1/handler_name.go:100 GetResource()
-   → internal/service/service_name.go:50 Fetch()                [External: None]
-   → internal/repository/repository_name.go:89 Get()
-   → internal/repository/repository_name.go:92 db.GetItem()     ← DynamoDB GetItem
+   Entry: API GET /v1/resources/:id
+   → internal/api/handler/v1/resource.go:100 GetResource()
+   → internal/service/resource_service.go:50 Fetch()                [External: None]
+   → internal/repository/resource_repo.go:89 Get()
+   → internal/repository/resource_repo.go:92 db.GetItem()     ← DynamoDB GetItem
 
    SDK Operation:
    - Type: Read
-   - Resource: resources_table
+   - Resource: table_b
    - Pre-insert required: Yes
 
    External Dependencies: None
@@ -1483,51 +1483,51 @@ Output verification procedures for each call chain with complete details.
 
 **Example for single SDK operation:**
 ```markdown
-## Chain 3: Task task_name_2
+## Chain 3: Task simple_task_a
 
 ### コールチェーン
 Entry → Complete call chain:
-Entry: Task task_name_2
-→ cmd/task_name_2/main.go:50 main()
-→ internal/usecase/usecase_name.go:30 Execute()
-→ internal/repository/repository_name.go:45 Save()
-→ internal/repository/repository_name.go:48 db.PutItem()  ← DynamoDB PutItem
+Entry: Task simple_task_a
+→ cmd/simple_task_a/main.go:50 main()
+→ internal/usecase/processor.go:30 Execute()
+→ internal/repository/data_repo.go:45 Save()
+→ internal/repository/data_repo.go:48 db.PutItem()  ← DynamoDB PutItem
 
 ### X-Ray確認ポイント
-- DynamoDB PutItem × 1回 (entities_table)
+- DynamoDB PutItem × 1回 (table_a)
 - Response: 200 OK, item created
 ```
 
 **Example for multiple SDK operations:**
 ```markdown
-## Chain 1: Task batch_task [★ Multiple SDK: 4 operations]
+## Chain 1: Task integrated_task [★ Multiple SDK: 4 operations]
 
 ### コールチェーン
 Entry → Intermediate layers (共通):
-Entry: Task batch_task
-→ cmd/batch_task/main.go:136 main()
-→ internal/tasks/batch_worker.go:40 Execute()
+Entry: Task integrated_task
+→ cmd/integrated_task/main.go:136 main()
+→ internal/tasks/worker.go:40 Execute()
 
 SDK Functions (個別):
-A. internal/tasks/batch_worker.go:41 → internal/service/entity_datastore.go:105 db.Query()
+A. internal/tasks/worker.go:41 → internal/service/datastore.go:105 db.Query()
    Operation: DynamoDB Query
 
-B. internal/tasks/batch_worker.go:134 → internal/service/counter.go:60 db.UpdateItem()
+B. internal/tasks/worker.go:134 → internal/service/counter.go:60 db.UpdateItem()
    Operation: DynamoDB UpdateItem (×2)
 
-C. internal/tasks/batch_worker.go:167 → internal/service/file_storage.go:254 db.PutItem()
+C. internal/tasks/worker.go:167 → internal/service/storage.go:254 db.PutItem()
    Operation: DynamoDB PutItem (×2)
 
-D. internal/tasks/batch_worker.go:116 → internal/service/entity_datastore.go:519 db.TransactWriteItems()
+D. internal/tasks/worker.go:116 → internal/service/datastore.go:519 db.TransactWriteItems()
    Operation: DynamoDB TransactWriteItems
 ```
 
 ### X-Ray確認ポイント
-- DynamoDB Query × 1回 (entities table)
-- DynamoDB UpdateItem × 2回 (counter table)
-- DynamoDB PutItem × 2回 (files table)
-- DynamoDB TransactWriteItems × 1回 (entities table)
-- Data flow: Query entities → Update counter → Put files → TransactWrite entities
+- DynamoDB Query × 1回 (table_a)
+- DynamoDB UpdateItem × 2回 (table_b)
+- DynamoDB PutItem × 2回 (table_c)
+- DynamoDB TransactWriteItems × 1回 (table_a)
+- Data flow: Query table_a → Update table_b → Put table_c → TransactWrite table_a
 ```
 
 ## Analysis Requirements
