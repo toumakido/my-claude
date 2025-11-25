@@ -116,7 +116,7 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    CRITICAL: List EVERY function in the call chain with file:line, not just SDK function.
    Omitting intermediate functions will cause Phase 3 to miss external service calls and business logic.
 
-   Call chain format (ALL functions must be listed):
+   **Format for single SDK operation:**
    ```
    Entry: [type] [identifier]
    → [file:line] EntryFunction
@@ -126,28 +126,66 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    → AWS SDK v2 API (Operation)
    ```
 
-   Example (complete chain with all functions):
+   **Format for multiple SDK operations (hierarchical structure):**
    ```
-   Entry: Task batch_processor
-   → cmd/batch_processor/main.go:136 runTask
-   → internal/tasks/batch_processor.go:40 (*Worker).ProcessBatch
-   → internal/tasks/batch_processor.go:134 (*Worker).ProcessTransfer
-   → internal/service/counter.go:60 (*Counter).GetNextValue
+   Chain: [entry_type] [identifier] [★ Multiple SDK: N operations]
+
+   Entry → Intermediate layers:
+   Entry: [type] [identifier]
+   → [file:line] EntryFunction
+   → [file:line] IntermediateFunction1
+   → [file:line] IntermediateFunction2
+
+   SDK Functions (Phase 3 targets):
+   [ChainID]-A. [file:line] SDKFunction1
+        Operation: [Service] [Operation1]
+
+   [ChainID]-B. [file:line] SDKFunction2
+        Operation: [Service] [Operation2]
+   ```
+
+   Example (single SDK operation):
+   ```
+   Entry: Task task_name
+   → cmd/task_name/main.go:100 main
+   → internal/tasks/task_worker.go:50 Execute
+   → internal/service/service_name.go:80 ProcessData
    → DynamoDB UpdateItem
+   ```
+
+   Example (multiple SDK operations):
+   ```
+   Chain: Task task_name [★ Multiple SDK: 3 operations]
+
+   Entry → Intermediate layers:
+   Entry: Task task_name
+   → cmd/task_name/main.go:100 main
+   → internal/tasks/task_worker.go:50 Execute
+   → internal/service/service_name.go:80 ProcessData
+
+   SDK Functions (Phase 3 targets):
+   1-A. internal/service/service_name.go:120 createRecord
+        Operation: DynamoDB PutItem
+
+   1-B. internal/service/service_name.go:150 updateRecord
+        Operation: DynamoDB UpdateItem
+
+   1-C. internal/service/service_name.go:180 processTransaction
+        Operation: DynamoDB TransactWriteItems
    ```
 
    BAD example (incomplete, missing intermediate functions):
    ```
-   Entry: Task batch_processor
-   → cmd/batch_processor/main.go runTask
-   → internal/service/counter.go:60 GetNextValue
+   Entry: Task task_name
+   → cmd/task_name/main.go main
+   → internal/service/service_name.go:80 ProcessData
    → DynamoDB UpdateItem
    ```
 
    **Validation**: After Task tool completes, verify output includes:
    - Entry function with file:line
    - ALL intermediate functions with file:line
-   - SDK function with file:line
+   - ALL SDK functions with file:line (for multiple SDK operations, list separately under "SDK Functions")
    - If any function lacks file:line, re-run Step 2 with explicit instruction to trace ALL functions
 
    If entry point not verified (marked in Step 2):
@@ -214,18 +252,72 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 4. **Format and cache optimal combination**
    Store Task result in variable for batch processing.
 
-   Output format (simple chain format):
+   **Output format for single SDK operation:**
    ```
-   [N]. [file:line] | [function] | [operations] [markers]
-   Chain: [entry point] → [intermediate layers] → AWS SDK API ([SDK method count], [hop count])
-   Active callers: [count]箇所 ([locations])
+   [N]. Chain: [entry_type] [identifier]
+
+   Entry: [type] [identifier]
+   → [file:line] EntryFunction
+   → [file:line] IntermediateFunction
+   → [file:line] SDKFunction
+   → [Service] [Operation]
+
+   (1 SDK operation, [hop_count] hops) Active callers: [count]箇所
    ```
 
-   Example:
+   **Output format for multiple SDK operations:**
    ```
-   1. internal/service/datastore.go:306 | CreateRecord | DynamoDB TransactWriteItems [+3 other operations]
-   Chain: POST /v1/records → handler.CreateRecords → service.CreateRecord → DynamoDB TransactWriteItems (3 SDK methods, 4 hops)
-   Active callers: 5箇所 (handlers)
+   [N]. Chain: [entry_type] [identifier] [★ Multiple SDK: N operations]
+
+   Entry → Intermediate layers:
+   Entry: [type] [identifier]
+   → [file:line] EntryFunction
+   → [file:line] IntermediateFunction
+
+   SDK Functions (Phase 3 targets):
+   [N]-A. [file:line] SDKFunction1
+          Operation: [Service] [Operation1]
+
+   [N]-B. [file:line] SDKFunction2
+          Operation: [Service] [Operation2]
+
+   ([N] SDK operations, [hop_count] hops) Active callers: [count]箇所
+   ```
+
+   Example (single SDK operation):
+   ```
+   1. Chain: Task task_name
+
+   Entry: Task task_name
+   → cmd/task_name/main.go:100 main
+   → internal/tasks/task_worker.go:50 Execute
+   → internal/service/service_name.go:80 ProcessData
+   → DynamoDB UpdateItem
+
+   (1 SDK operation, 4 hops) Active callers: 3箇所
+   ```
+
+   Example (multiple SDK operations):
+   ```
+   2. Chain: Task task_name [★ Multiple SDK: 3 operations]
+
+   Entry → Intermediate layers:
+   Entry: Task task_name
+   → cmd/task_name/main.go:100 main
+   → internal/tasks/task_worker.go:50 Execute
+   → internal/service/service_name.go:80 ProcessData
+
+   SDK Functions (Phase 3 targets):
+   2-A. internal/service/service_name.go:120 createRecord
+        Operation: DynamoDB PutItem
+
+   2-B. internal/service/service_name.go:150 updateRecord
+        Operation: DynamoDB UpdateItem
+
+   2-C. internal/service/service_name.go:180 processTransaction
+        Operation: DynamoDB TransactWriteItems
+
+   (3 SDK operations, 5 hops) Active callers: 2箇所
    ```
 
    DO NOT output verbose format with full code signatures unless explicitly requested.
@@ -811,51 +903,116 @@ Output:
 ```
 === 重複排除と最適化後の組み合わせ ===
 
-合計SDK関数数: 5個 (重複排除前: 8個のチェーン)
-選択されたチェーン数: 5個
+合計SDK関数数: 7個 (重複排除前: 10個のチェーン)
+選択されたチェーン数: 4個
 
 [Sorted by priority: multiple SDK methods first, then by chain length]
 
-1. internal/service/order.go:120 | (*OrderService).Process | DynamoDB + S3 + SES [★ Multiple SDK]
-   Chain: main → OrderService.Process → DynamoDB PutItem → S3 PutObject → SES SendEmail (3 SDK methods, 4 hops)
+1. Chain: Task task_name_1 [★ Multiple SDK: 3 operations]
 
-2. internal/gateway/data.go:89 | (*DataGateway).Import | S3 + DynamoDB [★ Multiple SDK] [+1 other chain]
-   Chain: handler → ImportService.Run → S3 GetObject → DynamoDB BatchWriteItem (2 SDK methods, 5 hops)
+   Entry → Intermediate layers:
+   Entry: Task task_name_1
+   → cmd/task_name_1/main.go:100 main
+   → internal/tasks/task_worker.go:50 Execute
+   → internal/service/service_name.go:80 ProcessData
 
-3. internal/repository/user.go:45 | (*UserRepository).Save | DynamoDB PutItem [+2 other chains]
-   Chain: main → UserUsecase.Create → UserRepository.Save (1 SDK method, 2 hops)
+   SDK Functions (Phase 3 targets):
+   1-A. internal/service/service_name.go:120 createRecord
+        Operation: DynamoDB PutItem
 
-4. internal/gateway/s3.go:120 | (*S3Gateway).Upload | S3 PutObject
-   Chain: main → FileService.Process → S3Gateway.Upload (1 SDK method, 2 hops)
+   1-B. internal/service/service_name.go:150 storeFile
+        Operation: S3 PutObject
 
-5. internal/repository/user.go:89 | (*UserRepository).Get | DynamoDB GetItem
-   Chain: handler → UserService.Fetch → UserRepository.Get (1 SDK method, 3 hops)
+   1-C. internal/service/service_name.go:180 sendMessage
+        Operation: SES SendEmail
+
+   (3 SDK operations, 5 hops) Active callers: 2箇所
+
+2. Chain: POST /v1/resource/action [★ Multiple SDK: 2 operations] [+1 other chain]
+
+   Entry → Intermediate layers:
+   Entry: API POST /v1/resource/action
+   → internal/api/handler/v1/handler_name.go:80 HandleAction
+   → internal/gateway/gateway_name.go:89 ProcessAction
+
+   SDK Functions (Phase 3 targets):
+   2-A. internal/gateway/gateway_name.go:120 fetchData
+        Operation: S3 GetObject
+
+   2-B. internal/gateway/gateway_name.go:200 saveBatch
+        Operation: DynamoDB BatchWriteItem
+
+   (2 SDK operations, 4 hops) Active callers: 1箇所
+
+3. Chain: Task task_name_2 [+2 other chains]
+
+   Entry: Task task_name_2
+   → cmd/task_name_2/main.go:50 main
+   → internal/usecase/usecase_name.go:30 Execute
+   → internal/repository/repository_name.go:45 Save
+   → DynamoDB PutItem
+
+   (1 SDK operation, 3 hops) Active callers: 3箇所
+
+4. Chain: API GET /v1/resource/:id
+
+   Entry: API GET /v1/resource/:id
+   → internal/api/handler/v1/handler_name.go:100 GetResource
+   → internal/service/service_name.go:50 Fetch
+   → internal/repository/repository_name.go:89 Get
+   → DynamoDB GetItem
+
+   (1 SDK operation, 4 hops) Active callers: 2箇所
 ```
 
 ### Batch Approval Summary (Phase 2)
 ```
 === バッチ処理する組み合わせ ===
 
-合計SDK関数数: 5個
-- Create操作: 3個
+合計SDK関数数: 7個
+- Create操作: 4個
 - Update操作: 0個
-- Read操作: 1個
+- Read操作: 2個
 - Delete操作: 0個
 - 複数SDK使用: 2個
 
 処理対象のチェーン:
-1. POST /v1/orders
-   → internal/api/handler/v1/order_handler.go:50 PostOrder
-   → internal/service/order.go:120 Process
-   → DynamoDB PutItem → S3 PutObject → SES SendEmail
-2. POST /v1/data/import
-   → internal/api/handler/v1/data_handler.go:80 Import
-   → internal/gateway/data.go:89 Import
-   → S3 GetObject → DynamoDB BatchWriteItem
-3. main
-   → internal/usecase/user.go:30 Create
-   → internal/repository/user.go:45 Save
+
+1. Chain: Task task_name_1 [★ Multiple SDK: 3 operations]
+   Entry → Intermediate layers:
+   Entry: Task task_name_1
+   → cmd/task_name_1/main.go:100 main
+   → internal/tasks/task_worker.go:50 Execute
+   → internal/service/service_name.go:80 ProcessData
+
+   SDK Functions:
+   1-A. internal/service/service_name.go:120 createRecord | DynamoDB PutItem
+   1-B. internal/service/service_name.go:150 storeFile | S3 PutObject
+   1-C. internal/service/service_name.go:180 sendMessage | SES SendEmail
+
+2. Chain: POST /v1/resource/action [★ Multiple SDK: 2 operations]
+   Entry → Intermediate layers:
+   Entry: API POST /v1/resource/action
+   → internal/api/handler/v1/handler_name.go:80 HandleAction
+   → internal/gateway/gateway_name.go:89 ProcessAction
+
+   SDK Functions:
+   2-A. internal/gateway/gateway_name.go:120 fetchData | S3 GetObject
+   2-B. internal/gateway/gateway_name.go:200 saveBatch | DynamoDB BatchWriteItem
+
+3. Chain: Task task_name_2
+   Entry: Task task_name_2
+   → cmd/task_name_2/main.go:50 main
+   → internal/usecase/usecase_name.go:30 Execute
+   → internal/repository/repository_name.go:45 Save
    → DynamoDB PutItem
+
+4. Chain: API GET /v1/resource/:id
+   Entry: API GET /v1/resource/:id
+   → internal/api/handler/v1/handler_name.go:100 GetResource
+   → internal/service/service_name.go:50 Fetch
+   → internal/repository/repository_name.go:89 Get
+   → DynamoDB GetItem
 ```
 
 ### Comment-out Summary (Phase 3)
