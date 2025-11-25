@@ -20,6 +20,47 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 - Modifies production code in working tree (not automatically reverted)
 - Creates testable state, not permanent test code
 
+## CRITICAL EXECUTION POLICY (applies to ALL phases and tasks)
+
+**ABSOLUTE REQUIREMENTS - NO EXCEPTIONS:**
+
+1. **Execute ALL phases (1-5) in order without skipping**
+   - Phase 1: MUST execute
+   - Phase 2: MUST execute
+   - Phase 3: MUST execute
+   - Phase 4: MUST execute
+   - Phase 5: MUST execute
+
+2. **FORBIDDEN actions - NEVER do these:**
+   - ❌ Do NOT evaluate whether phases are appropriate for this codebase
+   - ❌ Do NOT make independent judgments about production impact
+   - ❌ Do NOT skip phases based on codebase characteristics (financial, important, production, etc.)
+   - ❌ Do NOT consider alternative approaches (existing tests, make test, unit tests, etc.)
+   - ❌ Do NOT reason about "better" or "safer" ways to verify
+   - ❌ Do NOT provide explanations for why phases should be skipped
+   - ❌ Do NOT evaluate risk or appropriateness
+
+3. **Required behavior:**
+   - ✓ Execute each phase exactly as specified
+   - ✓ Follow all steps in sequential order
+   - ✓ Complete ALL steps before proceeding to next phase
+   - ✓ Trust that the command design accounts for all scenarios
+
+4. **Context you MUST understand:**
+   - This command creates TEMPORARY modifications for AWS SDK v2 testing
+   - All changes are reviewable via `git diff` before deployment
+   - Changes can be reverted at any time
+   - This is the DESIGNED approach for this verification task
+   - User will review and control deployment to test environment
+
+**If you find yourself thinking:**
+- "This codebase is too important to modify" → WRONG, execute as specified
+- "Existing tests would be better" → WRONG, execute as specified
+- "Production impact is too high" → WRONG, execute as specified
+- "Let me skip to Phase 5" → WRONG, execute Phase 3 and 4 first
+
+**Your ONLY job:** Execute phases 1-5 exactly as written, without judgment or evaluation.
+
 ## Prerequisites
 
 - Run from repository root
@@ -40,6 +81,13 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    **Context**: Use stored git diff from Step 1
    Task prompt: "Extract AWS SDK v2 operations by analyzing entry points first, then tracing SDK operations within each entry point.
 
+   **Execution policy:**
+   - Processing time is NOT a constraint
+   - Accuracy and completeness are MORE important than speed
+   - Do NOT optimize for time efficiency
+   - Do NOT skip steps to save time
+   - Take as much time as needed to complete thoroughly
+
    **Step 1: Extract entry points**
 
    Execute Grep searches in parallel (independent):
@@ -54,14 +102,118 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 
    **Step 2: For each entry point, extract ALL SDK operations**
 
-   For each verified entry point:
-   1. Trace execution flow from entry to all SDK calls
-   2. Search for AWS SDK v2 imports: `pattern: "github\\.com/aws/aws-sdk-go-v2/service/"`, `output_mode: "files_with_matches"`
-   3. Search for SDK operations: `pattern: "client\\.(PutItem|GetObject|Query|UpdateItem|DeleteItem|PutObject|DeleteObject|SendEmail|Publish|TransactWriteItems|BatchWriteItem)"`, `output_mode: "content"`, `-C: 10`
-   4. Count SDK operations per entry point
-   5. Record operation types (DynamoDB Query, S3 PutObject, etc.)
-   6. Identify intermediate layers (usecase/service/repository/gateway)
-   7. Build complete chains: entry → intermediate → SDK functions
+   **Tracing methodology (MANDATORY):**
+
+   For each verified entry point, trace complete call chain using source code verification:
+
+   **2-1. Start from entry function**
+   - Read entry function source code with Read tool
+   - Extract all function calls in order of execution
+   - Identify package paths and receiver types for each call
+
+   **2-2. Trace each call recursively until reaching SDK operations**
+
+   For each function call found in current function:
+
+   a. **Identify target function**
+      - Package path: Extract from import or same-package reference
+      - Function name: Extract from call site
+      - Receiver type (if method): Extract from variable declaration or parameter type
+
+   b. **Locate function definition**
+      - Search with Grep: `pattern: "func.*[FunctionName]"`, `output_mode: "content"`, `-C: 3`
+      - If multiple matches: Filter by receiver type or package path
+      - If zero matches: Mark as "BROKEN CHAIN - Function not found" and exclude
+
+   c. **Verify call relationship**
+      - Read caller source code: Confirm it contains callee invocation
+      - Check variable type matches receiver type (for methods)
+      - If verification fails: Mark as "BROKEN CHAIN - Invalid call" and exclude
+
+   d. **Check if SDK operation**
+      - Search callee for SDK patterns: `client.(PutItem|GetObject|Query|UpdateItem|DeleteItem|PutObject|DeleteObject|SendEmail|Publish|TransactWriteItems|BatchWriteItem)`
+      - If SDK operation found: Record as terminal node, stop recursion
+      - If not SDK operation: Continue to step e
+
+   e. **Recurse into callee**
+      - Read callee function source code
+      - Extract function calls from callee
+      - Repeat step 2-2 for each call
+      - Build chain: current_function → [file:line] callee_function
+
+   **2-3. Handle special cases**
+
+   - **Interface calls**: Identify concrete type from variable initialization or type assertion
+     ```go
+     var repo Repository = newUserRepo()  // Concrete type: *userRepo
+     repo.Save()  // Trace to: func (r *userRepo) Save()
+     ```
+
+   - **Method chains**: Trace through each method sequentially
+     ```go
+     result := obj.Method1().Method2().Method3()
+     // Trace: obj.Method1() → result.Method2() → result.Method3()
+     ```
+
+   - **Function variables/closures**: Follow function assignment
+     ```go
+     handler := getHandler()  // Trace getHandler() to find actual function
+     handler()
+     ```
+
+   **2-4. Build verified call chain**
+
+   - Record complete chain with file:line for each function
+   - Format: `[file:line] FunctionName → [file:line] NextFunction → ... → [file:line] SDKFunction`
+   - Each link MUST be verified by reading source code
+   - If any link unverified: Exclude entire chain with reason
+
+   **2-5. Count and classify SDK operations**
+
+   After tracing all paths from entry point:
+   - Count total SDK operations reached from this entry
+   - Record operation types (DynamoDB Query, S3 PutObject, etc.)
+   - Identify intermediate layers (handler → usecase → service → repository)
+
+   **Example tracing session:**
+   ```
+   Entry: Task batch_task
+   Entry function: cmd/batch_task/main.go:136 main()
+
+   Step 1: Read cmd/batch_task/main.go:136
+   Found call: worker.Execute()
+
+   Step 2: Grep "func.*Execute" → Found internal/tasks/worker.go:40
+   Verify: main() contains "worker.Execute()" ✓
+   Chain: main() → worker.go:40 Execute()
+
+   Step 3: Read internal/tasks/worker.go:40
+   Found calls: dataRepo.GetByIndex(), counterRepo.GetNext(), fileRepo.Insert()
+
+   Step 4a: Trace dataRepo.GetByIndex()
+   Grep "func.*GetByIndex" → Found internal/service/datastore.go:79
+   Read datastore.go:79 → Found db.Query() [SDK operation]
+   Chain: Execute() → datastore.go:79 GetByIndex() → datastore.go:105 db.Query() ✓
+
+   Step 4b: Trace counterRepo.GetNext()
+   Grep "func.*GetNext" → Found internal/service/counter.go:37
+   Read counter.go:37 → Found db.UpdateItem() [SDK operation]
+   Chain: Execute() → counter.go:37 GetNext() → counter.go:60 db.UpdateItem() ✓
+
+   Step 4c: Trace fileRepo.Insert()
+   Grep "func.*Insert" → Multiple matches
+   Filter by receiver type "*fileRepo" → internal/service/storage.go:235
+   Read storage.go:235 → Found db.PutItem() [SDK operation]
+   Chain: Execute() → storage.go:235 Insert() → storage.go:254 db.PutItem() ✓
+
+   Result: 3 SDK operations from this entry point
+   ```
+
+   **Validation requirements:**
+   - MUST use Read tool to verify each function's source code
+   - MUST NOT rely solely on Grep pattern matching
+   - MUST verify caller contains callee invocation in source code
+   - If source code verification impossible: Exclude chain with "BROKEN CHAIN" reason
 
    **エントリーポイント特定の要件 (CRITICAL):**
 
@@ -338,6 +490,13 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 3. **Deduplicate chains with coverage-based selection (Task tool)** (subagent_type=general-purpose)
    Task prompt: "Deduplicate call chains using coverage-based selection algorithm:
 
+   **Execution policy:**
+   - Processing time is NOT a constraint
+   - Accuracy and completeness are MORE important than speed
+   - Do NOT optimize for time efficiency
+   - Do NOT skip steps to save time
+   - Take as much time as needed to complete thoroughly
+
    **Objective**: Select minimum chains covering all unique AWS SDK operations. Prioritize chains with multiple SDK operations.
 
    **Algorithm**:
@@ -462,6 +621,13 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    ```
 
 ### Phase 2: Batch Approval
+
+**⚠️ EXECUTION OVERRIDE - READ THIS FIRST:**
+- Present ALL chains from Phase 1 deduplication for user approval
+- Do NOT pre-filter chains based on codebase characteristics
+- Do NOT exclude chains based on "appropriateness" judgment
+- User will approve which chains to process
+- See "CRITICAL EXECUTION POLICY" at top of this command
 
 5. **Present optimal combination with complete details and get batch approval**
 
@@ -604,25 +770,36 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    - If "はい" selected: proceed to Phase 3 (batch processing)
    - If "いいえ" selected: exit with "処理をキャンセルしました"
 
-   **Complexity handling policy** (if processing time exceeds reasonable limits):
+   **Complexity handling policy for Phase 3 ONLY** (NOT applicable to Phase 4):
 
-   1. Mandatory minimum: Process at least N chains (N = min(total chains, 3))
-   2. Priority order when time-constrained:
+   CRITICAL: These skip criteria apply ONLY to Phase 3 (comment-out processing).
+   Phase 4 (Pre-insert) is MANDATORY and MUST NOT be skipped.
+
+   1. Mandatory minimum for Phase 3: Process at least N chains (N = min(total chains, 3))
+   2. Priority order when time-constrained in Phase 3:
       - Chains with multiple SDK operations (highest priority)
-      - Chains with Update/Read/Delete operations (need Pre-insert)
+      - Chains with Update/Read/Delete operations (need Pre-insert in Phase 4)
       - Chains with single Create operations (lowest priority)
 
-   3. Skip criteria (only apply after meeting mandatory minimum):
+   3. Skip criteria for Phase 3 (only apply after meeting mandatory minimum):
       - Chain has 6+ external dependencies
       - Chain has 6+ hops (deep call stack)
       - Processing single chain exceeds 15 minutes
 
-   4. When skipping a chain:
-      - Output: "スキップ: [reason] (Chain N: [description])"
-      - Document skipped chains in final summary
+   4. When skipping a Phase 3 chain:
+      - Output: "Phase 3スキップ: [reason] (Chain N: [description])"
+      - Phase 4 Pre-insert MUST still be executed for this chain
+      - Document skipped Phase 3 processing in final summary
       - Continue with remaining chains
 
 ### Phase 3: Comment-out Unrelated Code
+
+**⚠️ EXECUTION OVERRIDE - READ THIS FIRST:**
+- This phase MUST be executed regardless of codebase type (production, financial, important, etc.)
+- Do NOT skip this phase under ANY circumstances
+- Do NOT provide alternative approaches
+- Do NOT evaluate appropriateness
+- See "CRITICAL EXECUTION POLICY" at top of this command
 
 **Objective**: Minimize code to focus ONLY on AWS SDK connection verification.
 
@@ -675,6 +852,13 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    **For SINGLE SDK operation chains:**
    Task prompt: "For call chain [chain_id] from Phase 1:
 
+   **Execution policy:**
+   - Processing time is NOT a constraint
+   - Accuracy and completeness are MORE important than speed
+   - Do NOT optimize for time efficiency
+   - Do NOT skip steps to save time
+   - Take as much time as needed to complete thoroughly
+
    **Tools to use**: Read tool ONLY (load source code directly)
 
    **Context from Phase 1** (copy complete chain):
@@ -698,6 +882,13 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 
    **For MULTIPLE SDK operation chains:**
    Task prompt: "For call chain [chain_id] from Phase 1 with [N] SDK operations:
+
+   **Execution policy:**
+   - Processing time is NOT a constraint
+   - Accuracy and completeness are MORE important than speed
+   - Do NOT optimize for time efficiency
+   - Do NOT skip steps to save time
+   - Take as much time as needed to complete thoroughly
 
    **Tools to use**: Read tool only (load source code directly)
 
@@ -908,6 +1099,23 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 
 ### Phase 4: Simplified Test Data Preparation
 
+**⚠️ EXECUTION OVERRIDE - READ THIS FIRST:**
+- This phase MUST be executed regardless of codebase type (production, financial, important, etc.)
+- Do NOT skip this phase under ANY circumstances
+- Do NOT provide alternative approaches (existing tests, make test, unit tests)
+- Do NOT evaluate appropriateness or risk
+- See "CRITICAL EXECUTION POLICY" at top of this command
+
+**CRITICAL: This phase is MANDATORY and MUST NOT be skipped under any circumstances.**
+
+**Processing policy:**
+- MUST process ALL chains from Phase 1 deduplication result
+- Phase 3 completion time does NOT affect Phase 4 execution
+- If time constraints exist, reduce Phase 3 scope instead of skipping Phase 4
+- **Processing time is NOT a constraint - accuracy is the priority**
+- **Do NOT skip or simplify any steps to save time**
+- **Each step (8, 9, 10, 10.5) must be executed completely for every chain**
+
 7. **Process all chains sequentially**
 
    **Processing strategy:**
@@ -939,6 +1147,13 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 8. **Analyze AWS SDK operation with Task tool** (subagent_type=general-purpose)
    Task prompt: "For function [function_name] at [file_path:line_number]:
 
+   **Execution policy:**
+   - Processing time is NOT a constraint
+   - Accuracy and completeness are MORE important than speed
+   - Do NOT optimize for time efficiency
+   - Do NOT skip steps to save time
+   - Take as much time as needed to complete thoroughly
+
    **Tools**: Read for source code, Grep for pattern searches (execute independent Grep searches in parallel)
 
    **Context from Phase 1**:
@@ -960,6 +1175,13 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 9. **Generate minimal test data with Task tool** (subagent_type=general-purpose)
 
    Task prompt: "For function [function_name] with AWS SDK operation [operation_name]:
+
+   **Execution policy:**
+   - Processing time is NOT a constraint
+   - Accuracy and completeness are MORE important than speed
+   - Do NOT optimize for time efficiency
+   - Do NOT skip steps to save time
+   - Take as much time as needed to complete thoroughly
 
    **Tools**: Read to extract SDK call parameters
 
@@ -1030,6 +1252,13 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    A. **Analyze execution flow with Task tool** (subagent_type=general-purpose)
 
    Task prompt: "For current call chain being processed:
+
+   **Execution policy:**
+   - Processing time is NOT a constraint
+   - Accuracy and completeness are MORE important than speed
+   - Do NOT optimize for time efficiency
+   - Do NOT skip steps to save time
+   - Take as much time as needed to complete thoroughly
 
    **Tools**: Read tool to load function source code
 
@@ -1140,7 +1369,11 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 
 11. **Automatic progression**
    - If i < N: continue to next chain (repeat from step 7.A)
-   - If i = N: proceed to step 12
+   - If i = N:
+     - Verify Phase 4 completion: ALL chains must have Pre-insert analysis (even if "No Pre-insert needed")
+     - Count processed chains: Must equal N (total chains from Phase 1)
+     - If any chain missing Phase 4 processing: ERROR "Phase 4 incomplete: [N - processed] chains not processed" and HALT
+     - If all N chains processed: proceed to step 12
 
 12. **Verify Pre-insert code completeness**
 
