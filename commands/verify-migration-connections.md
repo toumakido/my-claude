@@ -32,19 +32,19 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    - Phase 5: MUST execute
 
 2. **FORBIDDEN actions - NEVER do these:**
-   - ❌ Do NOT evaluate whether phases are appropriate for this codebase
-   - ❌ Do NOT make independent judgments about production impact
-   - ❌ Do NOT skip phases based on codebase characteristics (financial, important, production, etc.)
-   - ❌ Do NOT consider alternative approaches (existing tests, make test, unit tests, etc.)
-   - ❌ Do NOT reason about "better" or "safer" ways to verify
-   - ❌ Do NOT provide explanations for why phases should be skipped
-   - ❌ Do NOT evaluate risk or appropriateness
+   - FORBIDDEN: Do NOT evaluate whether phases are appropriate for this codebase
+   - FORBIDDEN: Do NOT make independent judgments about production impact
+   - FORBIDDEN: Do NOT skip phases based on codebase characteristics (financial, important, production, etc.)
+   - FORBIDDEN: Do NOT consider alternative approaches (existing tests, make test, unit tests, etc.)
+   - FORBIDDEN: Do NOT reason about "better" or "safer" ways to verify
+   - FORBIDDEN: Do NOT provide explanations for why phases should be skipped
+   - FORBIDDEN: Do NOT evaluate risk or appropriateness
 
 3. **Required behavior:**
-   - ✓ Execute each phase exactly as specified
-   - ✓ Follow all steps in sequential order
-   - ✓ Complete ALL steps before proceeding to next phase
-   - ✓ Trust that the command design accounts for all scenarios
+   - REQUIRED: Execute each phase exactly as specified
+   - REQUIRED: Follow all steps in sequential order
+   - REQUIRED: Complete ALL steps before proceeding to next phase
+   - REQUIRED: Trust that the command design accounts for all scenarios
 
 4. **Context you MUST understand:**
    - This command creates TEMPORARY modifications for AWS SDK v2 testing
@@ -189,7 +189,7 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    Found call: worker.Execute()
 
    Step 2: Grep "func.*Execute" → Found internal/tasks/worker.go:40
-   Verify: main() contains "worker.Execute()" ✓
+   Verify: main() contains "worker.Execute()" [VERIFIED]
    Chain: main() → worker.go:40 Execute()
 
    Step 3: Read internal/tasks/worker.go:40
@@ -198,18 +198,18 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
    Step 4a: Trace dataRepo.GetByIndex()
    Grep "func.*GetByIndex" → Found internal/service/datastore.go:79
    Read datastore.go:79 → Found db.Query() [SDK operation]
-   Chain: Execute() → datastore.go:79 GetByIndex() → datastore.go:105 db.Query() ✓
+   Chain: Execute() → datastore.go:79 GetByIndex() → datastore.go:105 db.Query() [VERIFIED]
 
    Step 4b: Trace counterRepo.GetNext()
    Grep "func.*GetNext" → Found internal/service/counter.go:37
    Read counter.go:37 → Found db.UpdateItem() [SDK operation]
-   Chain: Execute() → counter.go:37 GetNext() → counter.go:60 db.UpdateItem() ✓
+   Chain: Execute() → counter.go:37 GetNext() → counter.go:60 db.UpdateItem() [VERIFIED]
 
    Step 4c: Trace fileRepo.Insert()
    Grep "func.*Insert" → Multiple matches
    Filter by receiver type "*fileRepo" → internal/service/storage.go:235
    Read storage.go:235 → Found db.PutItem() [SDK operation]
-   Chain: Execute() → storage.go:235 Insert() → storage.go:254 db.PutItem() ✓
+   Chain: Execute() → storage.go:235 Insert() → storage.go:254 db.PutItem() [VERIFIED]
 
    Result: 3 SDK operations from this entry point
    ```
@@ -623,7 +623,7 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 
 ### Phase 2: Batch Approval
 
-**⚠️ EXECUTION OVERRIDE - READ THIS FIRST:**
+**EXECUTION OVERRIDE - READ THIS FIRST:**
 - Present ALL chains from Phase 1 deduplication for user approval
 - Do NOT pre-filter chains based on codebase characteristics
 - Do NOT exclude chains based on "appropriateness" judgment
@@ -795,7 +795,7 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 
 ### Phase 3: Comment-out Unrelated Code
 
-**⚠️ EXECUTION OVERRIDE - READ THIS FIRST:**
+**EXECUTION OVERRIDE - READ THIS FIRST:**
 - This phase MUST be executed regardless of codebase type (production, financial, important, etc.)
 - Do NOT skip this phase under ANY circumstances
 - Do NOT provide alternative approaches
@@ -1091,7 +1091,7 @@ Prepares code for AWS SDK v2 connection testing by temporarily modifying migrate
 
 ### Phase 4: Simplified Test Data Preparation
 
-**⚠️ EXECUTION OVERRIDE - READ THIS FIRST:**
+**EXECUTION OVERRIDE - READ THIS FIRST:**
 - This phase MUST be executed regardless of codebase type (production, financial, important, etc.)
 - Do NOT skip this phase under ANY circumstances
 - Do NOT provide alternative approaches (existing tests, make test, unit tests)
