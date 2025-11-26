@@ -100,6 +100,22 @@ For each chain in `.migration-chains.json`:
 
       Record: Pre-insert code to add (file:line, pre_insert_code)
 
+   c. **Identify SDK operation log positions**
+      - For each SDK operation, locate the operation call and error check
+      - Identify insertion point: after error check, before response processing
+      - Determine appropriate log message based on operation type:
+        - Query/Scan: `log.Printf("[SDK Test] %s succeeded: %%d items", operation, len(resp.Items))`
+        - GetItem: `log.Printf("[SDK Test] %s succeeded: item found=%%v", operation, resp.Item != nil)`
+        - PutItem/UpdateItem: `log.Printf("[SDK Test] %s succeeded", operation)`
+        - DeleteItem: `log.Printf("[SDK Test] %s succeeded", operation)`
+        - TransactWriteItems: `log.Printf("[SDK Test] %s succeeded: %%d items", operation, len(input.TransactItems))`
+        - GetObject (S3): `log.Printf("[SDK Test] %s succeeded: size=%%d", operation, resp.ContentLength)`
+        - PutObject (S3): `log.Printf("[SDK Test] %s succeeded", operation)`
+        - SendEmail (SES): `log.Printf("[SDK Test] %s succeeded: MessageId=%%s", operation, *resp.MessageId)`
+        - Publish (SNS): `log.Printf("[SDK Test] %s succeeded: MessageId=%%s", operation, *resp.MessageId)`
+
+      Record: Log insertion points (file:line, operation, log_code, response_var)
+
 4. **Display analysis summary**
    ```
    完了 (N/M): 分析
@@ -109,6 +125,7 @@ For each chain in `.migration-chains.json`:
    - ダミー値必要: Z個
    - 実行フロー問題: W個
    - Pre-insert必要: P個 (Update/Read/Delete operations)
+   - SDK操作ログ追加: L個
    ```
 
 5. **After analyzing all chains, display Phase 1 summary**
@@ -119,6 +136,7 @@ For each chain in `.migration-chains.json`:
    ダミー値必要: 合計Z個
    実行フロー問題: 合計W個
    Pre-insert生成: 合計P個
+   SDK操作ログ追加: 合計L個
 
    Phase 2で一括適用します
    ```
@@ -192,13 +210,62 @@ Apply all modifications collected in Phase 1 in a single batch.
    }
    ```
 
-6. **Display Phase 2 summary**
+6. **Apply SDK operation log additions** (Edit tool)
+
+   For each recorded log insertion point from Phase 1:
+   - Apply Edit: Insert log statement after SDK call and error check
+   - Use proper indentation matching surrounding code
+   - Add `log` package import if missing
+   - Display progress: "Adding log: [file:line] ([operation])"
+
+   Example for DynamoDB Query:
+   ```go
+   // Before
+   result, err := s.db.Query(ctx, &dynamodb.QueryInput{...})
+   if err != nil {
+       return nil, err
+   }
+   // // Response processing
+   // entities := parseEntities(result.Items)
+
+   // After
+   result, err := s.db.Query(ctx, &dynamodb.QueryInput{...})
+   if err != nil {
+       return nil, err
+   }
+   log.Printf("[SDK Test] Query succeeded: %d items returned", len(result.Items))
+   // // Response processing
+   // entities := parseEntities(result.Items)
+   ```
+
+   Example for S3 GetObject:
+   ```go
+   // Before
+   resp, err := s.s3.GetObject(ctx, &s3.GetObjectInput{...})
+   if err != nil {
+       return nil, err
+   }
+   // // Process object
+   // data := readObject(resp.Body)
+
+   // After
+   resp, err := s.s3.GetObject(ctx, &s3.GetObjectInput{...})
+   if err != nil {
+       return nil, err
+   }
+   log.Printf("[SDK Test] GetObject succeeded: size=%d bytes", *resp.ContentLength)
+   // // Process object
+   // data := readObject(resp.Body)
+   ```
+
+7. **Display Phase 2 summary**
    ```
    === Phase 2: 変更適用完了 ===
    コメントアウト適用: Y個ブロック
    ダミー値追加: Z個
    実行フロー修正: W個
    Pre-insert追加: P個
+   SDK操作ログ追加: L個
 
    Phase 3で検証します
    ```
@@ -328,6 +395,7 @@ Verify all modifications in a single phase with one compilation check.
    処理済みチェーン: N個
    コメントアウトブロック: X個
    Pre-insert生成: Y個
+   SDK操作ログ追加: L個
    実行フロー修正: W個
    SDK操作カバレッジ: Z/Z 操作 (100%)
    最終コンパイル: 成功
@@ -435,6 +503,10 @@ func (s *Service) GetEntities(ctx context.Context) ([]Entity, error) {
         TableName: aws.String("entities"),
         KeyConditionExpression: aws.String("date = :date"),
     })
+    if err != nil {
+        return nil, err
+    }
+    log.Printf("[SDK Test] Query succeeded: %d items returned", len(result.Items))
 
     // // Response processing
     // entities := parseEntities(result.Items)
@@ -472,6 +544,7 @@ func (s *Service) GetEntitiesByStatus(ctx context.Context) ([]Entity, error) {
     if err != nil {
         return nil, err
     }
+    log.Printf("[SDK Test] Query succeeded: %d items returned", len(result.Items))
     // // Response processing commented out
     // for _, item := range result.Items {
     //     entity := parseEntity(item)
@@ -493,11 +566,13 @@ func (h *Handler) ProcessEntities(ctx context.Context) error {
         if err != nil {
             return err
         }
+        log.Printf("[SDK Test] UpdateItem succeeded")
         // PutItem never reached
         _, err = h.db.PutItem(ctx, &dynamodb.PutItemInput{...})
         if err != nil {
             return err
         }
+        log.Printf("[SDK Test] PutItem succeeded")
     }
     return nil
 }
@@ -522,6 +597,7 @@ func (s *Service) GetEntitiesByStatus(ctx context.Context) ([]Entity, error) {
     if err != nil {
         return nil, err
     }
+    log.Printf("[SDK Test] Query succeeded: %d items returned", len(result.Items))
     // // Response processing commented out
     // for _, item := range result.Items {
     //     entity := parseEntity(item)
@@ -544,11 +620,13 @@ func (h *Handler) ProcessEntities(ctx context.Context) error {
         if err != nil {
             return err
         }
+        log.Printf("[SDK Test] UpdateItem succeeded")
         // PutItem now reachable
         _, err = h.db.PutItem(ctx, &dynamodb.PutItemInput{...})
         if err != nil {
             return err
         }
+        log.Printf("[SDK Test] PutItem succeeded")
     }
     return nil
 }
@@ -589,6 +667,13 @@ Chain 1: 3/3 操作が到達可能 [OK]
 - Improved verification reliability: Ensures not just compilation but actual execution paths
 - Reduced debugging time: Prevents discovering untested SDK operations after deployment
 - Coverage guarantee: All operations in `.migration-chains.json` verified as reachable
+
+**SDK operation logging (Phase 2 step 6):**
+- Runtime verification: Confirms SDK operations actually execute and return responses
+- Operation-specific output: Logs relevant data (item counts, sizes, message IDs) for each operation type
+- Easy debugging: Clear `[SDK Test]` prefix identifies test-related logs in application output
+- No manual intervention: Logs automatically added after all SDK operations during Phase 2
+- Production-ready format: Uses standard `log.Printf` compatible with existing logging infrastructure
 
 ## Next Steps
 
