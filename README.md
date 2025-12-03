@@ -6,6 +6,7 @@
 
 - `CLAUDE.md` - Claude Code全体のルール設定
 - `commands/` - カスタムコマンド
+- `agents/` - カスタムエージェント定義
 - `sample/` - サンプルコード
 
 ### commands/ ディレクトリの設計原則
@@ -23,5 +24,6 @@
 
 - `./CLAUDE.md` ↔ `~/.claude/CLAUDE.md`
 - `./commands/` ↔ `~/.claude/commands/`
+- `./agents/` ↔ `~/.claude/agents/`
 
-**重要**: Claude Code に関する設定変更を依頼する場合は、必ずこのリポジトリ内のファイル（`./CLAUDE.md`, `./commands/`）を操作してください。`~/.claude/` 配下を直接操作しないでください。
+**重要**: Claude Code に関する設定変更を依頼する場合は、必ずこのリポジトリ内のファイル（`./CLAUDE.md`, `./commands/`, `./agents/`）を操作してください。`~/.claude/` 配下を直接操作しないでください。
