@@ -77,11 +77,11 @@ Signature: [full function signature]
 ### 2. Call Chain Tree
 Present each entry point and its path as a text tree:
 ```
-📍 Entry Point: main (cmd/api/main.go:45)
+Entry Point: main (cmd/api/main.go:45)
   └─→ StartServer (cmd/api/main.go:67)
       └─→ SetupRoutes (internal/api/handler/routes.go:23)
           └─→ RegisterHandlers (internal/api/handler/v1/register.go:15)
-              └─→ GetNextUser (internal/service/user.go:102) ⭐
+              └─→ GetNextUser (internal/service/user.go:102) 
 ```
 
 ### 3. Investigation Log
