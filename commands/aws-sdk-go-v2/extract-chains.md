@@ -38,18 +38,23 @@ Use this command when:
 
    Use Task tool with subagent_type: general-purpose
 
-   Task prompt: "Find all AWS SDK v2 function calls in the current branch changes.
+   Task prompt: "Find all AWS SDK v2 operation calls in the current branch changes.
 
    **Execution policy:** See EXECUTION POLICY FOR TASK TOOL INVOCATIONS section
 
    Identify changes that include github.com/aws/aws-sdk-go-v2 imports.
-   Use the most appropriate method to discover SDK function calls.
+   Use the most appropriate method to discover SDK operation calls.
 
-   If no SDK v2 changes found:
+   **Target operations only:**
+   - Data operations: PutItem, GetItem, Query, Scan, UpdateItem, DeleteItem, etc.
+   - Service operations: Invoke, Publish, SendMessage, PutObject, GetObject, etc.
+   - Exclude client initialization: NewFromConfig, New*Client, LoadDefaultConfig, etc.
+
+   If no SDK v2 operation calls found:
    - Output: 'このブランチはAWS SDK Go v2関連の変更を含んでいません'
    - Exit
 
-   For each SDK call found:
+   For each SDK operation call found:
    - Extract the enclosing Go function name
    - Record file path and line number
 
@@ -166,7 +171,7 @@ Use this command when:
 
    保存先: .migration-chains.json
 
-   次のステップ: /prepare-sdk-tests コマンドでテストコードを生成
+   次のステップ: /prepare-tests コマンドでテスト準備と検証手順書を生成
    ```
 
 ## Output
@@ -249,6 +254,7 @@ Output (.migration-chains.json):
 ## Next Steps
 
 1. Review `.migration-chains.json`
-2. Run `/prepare-sdk-tests` command to modify code for testing
-3. Deploy to test environment
-4. Run `/generate-verification` command for AWS verification procedures
+2. Run `/prepare-tests` command to:
+   - Modify code for testing
+   - Generate AWS verification procedures
+3. Deploy to test environment and execute verification procedures

@@ -1,6 +1,6 @@
 # Prepare SDK Code for Testing
 
-This command prepares AWS SDK v2 migrated code for connection testing by modifying code temporarily.
+This command prepares AWS SDK v2 migrated code for connection testing by modifying code temporarily and generating verification procedures.
 
 Output language: Japanese, formal business tone
 
@@ -9,10 +9,16 @@ Output language: Japanese, formal business tone
 ## When to Use This Command
 
 Use this command when:
-- After running `/extract-sdk-chains` and approving chains
+- After running `/extract-chains` and approving chains
 - Need to isolate SDK connection code from business logic
 - Want to test AWS SDK v2 connections without external dependencies
 - Before deploying to test environment for verification
+
+This command performs:
+- Code modification (comment out business logic, add pre-insert, add logs)
+- Compilation verification
+- SDK operation coverage verification
+- AWS verification procedure document generation
 
 ## Prerequisites
 
@@ -794,10 +800,135 @@ Chain 1: 3/3 操作が到達可能 [OK]
 - No manual intervention: Logs automatically added after all SDK operations during Phase 2
 - Production-ready format: Uses standard `log.Printf` compatible with existing logging infrastructure
 
+### Phase 4: Verification Document Generation
+
+Generate execution procedures for testing in AWS environment.
+
+1. **Load chain data from `.migration-chains.json`** (Read tool)
+
+2. **For each chain, generate execution command**:
+
+   **API endpoints:**
+   ```bash
+   curl -X [METHOD] https://[host]/[path] \
+     -H "Content-Type: application/json" \
+     -H "Authorization: Bearer $TOKEN" \
+     -d '{"key":"value"}'
+   ```
+
+   **ECS Tasks:**
+   ```bash
+   aws ecs run-task \
+     --cluster [cluster-name] \
+     --task-definition [task-name]:latest \
+     --launch-type FARGATE \
+     --network-configuration "awsvpcConfiguration={subnets=[subnet-xxx],securityGroups=[sg-xxx],assignPublicIp=ENABLED}"
+   ```
+
+   **CLI commands:**
+   ```bash
+   ./bin/[command] [args]
+   ```
+
+3. **Generate X-Ray verification points**
+
+   For each chain's SDK operations:
+   - Extract service, operation, and resource from `sdk_operations` array
+   - List expected operations with counts:
+     - Query/Scan: Include item count
+     - GetItem: Include found status
+     - PutItem/UpdateItem/DeleteItem: Basic success
+     - TransactWriteItems: Include transaction count
+     - S3 operations: Include size/object info
+     - SES/SNS: Include MessageId
+
+4. **Write `aws-verification-procedures.md`** (Write tool)
+
+   Document structure:
+   ```markdown
+   # AWS SDK v2 Migration Verification Procedures
+
+   ## Summary
+   - Total chains: N
+   - Total SDK operations: M
+   - API endpoints: A
+   - ECS tasks: B
+   - CLI commands: C
+
+   ## Verification Steps
+   1. For each chain below:
+      - Execute command
+      - Check X-Ray traces in AWS Console
+      - Verify expected SDK operations appear
+      - Confirm no errors in CloudWatch Logs
+   2. Document results
+
+   ## Chain 1: [type] [identifier]
+
+   ### コールチェーン
+   Entry: [type] [identifier]
+   → [file:line] EntryFunc
+   → [file:line] IntermediateFunc
+   → [file:line] SDKFunc ← [Service] [Operation]
+
+   ### 実行コマンド
+   ```bash
+   [execution command]
+   ```
+
+   ### X-Ray確認ポイント
+   - [Service] [Operation] × N回 ([resource])
+   ```
+
+   For chains with multiple SDK operations:
+   ```markdown
+   ## Chain N: [type] [identifier] [★ Multiple SDK: M operations]
+
+   ### コールチェーン
+   Entry: [type] [identifier]
+   → [file:line] EntryFunc
+   → [file:line] IntermediateFunc
+
+   SDK Functions:
+   A. [file:line] SDKFunc1 ← [Service] [Op1]
+   B. [file:line] SDKFunc2 ← [Service] [Op2]
+
+   ### 実行コマンド
+   ```bash
+   [execution command]
+   ```
+
+   ### X-Ray確認ポイント
+   - [Service] [Op1] × N回
+   - [Service] [Op2] × M回
+   - Data flow: Op1 → Op2
+   ```
+
+5. **Display Phase 4 summary**
+   ```
+   === Phase 4: 検証手順書生成完了 ===
+   出力ファイル: aws-verification-procedures.md
+   - 総チェーン数: N個
+   - 総SDK操作数: M個
+   - API: A個, Task: B個, CLI: C個
+   ```
+
+6. **Display final completion**
+   ```
+   === 全Phase完了 ===
+   Phase 1: 分析 - N chains
+   Phase 2: 変更適用 - X modifications
+   Phase 3: 検証 - コンパイル成功, SDK操作カバレッジ 100%
+   Phase 4: 検証手順書生成 - aws-verification-procedures.md
+
+   Next: See "Next Steps" section below
+   ```
+
 ## Next Steps
 
 1. Review: `git diff`
 2. Verify: `go build` succeeds
-3. Deploy to AWS test environment
-4. Run `/generate-verification` command for verification procedures
-5. After testing: `git checkout .` to revert changes
+3. Review: `aws-verification-procedures.md`
+4. Deploy to AWS test environment
+5. Execute verification procedures
+6. After testing: `git checkout .` to revert changes
