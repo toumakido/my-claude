@@ -7,7 +7,6 @@
 - `CLAUDE.md` - Claude Code全体のルール設定
 - `commands/` - カスタムコマンド
 - `agents/` - カスタムエージェント定義
-- `sample/` - サンプルコード
 
 ### commands/ ディレクトリの設計原則
 
