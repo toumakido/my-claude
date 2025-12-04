@@ -279,9 +279,11 @@ Generate execution procedures for testing in AWS environment.
 
 2. **For each chain, generate execution command**:
 
-   **API endpoints:**
+   **API endpoints (use endpoint object from chain):**
+   - Extract method, path from chain.endpoint
+   - Generate curl command:
    ```bash
-   curl -X [METHOD] https://[host]/[path] \
+   curl -X [endpoint.method] https://[host][endpoint.path] \
      -H "Content-Type: application/json" \
      -H "Authorization: Bearer $TOKEN" \
      -d '{"key":"value"}'

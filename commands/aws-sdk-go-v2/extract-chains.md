@@ -90,6 +90,11 @@ Use this command when:
 
    Exclude test files, mocks, and internal/repository/mocks/.
 
+   **IMPORTANT for API endpoints:**
+   - Start call chain from HTTP handler function (e.g., HandleGetEntities)
+   - DO NOT include main.go or router setup in call chain
+   - Record endpoint information separately (method, path, handler location)
+
    Provide the complete call chain from each entry point to this function.
    ```
 
@@ -105,6 +110,10 @@ Use this command when:
    For each agent result:
    - Extract entry points (API/Task/CLI) with identifiers
    - Extract call chains with file:line for each function
+   - **For API entry points:**
+     - Remove main.go from call chain if present
+     - Start call chain from HTTP handler function
+     - Add endpoint object with method, path, and handler reference
    - Identify SDK operations and classify as Create/Read/Update/Delete
    - Count SDK operations per entry point
    - Mark chains without entry points as "SKIP - No entry point"
@@ -241,6 +250,11 @@ Output (.migration-chains.json):
     "id": 1,
     "type": "API",
     "identifier": "POST /v1/entities",
+    "endpoint": {
+      "method": "POST",
+      "path": "/v1/entities",
+      "handler": "internal/api/handler.go:50:CreateEntity"
+    },
     "call_chain": [
       {"file": "internal/api/handler.go", "line": 50, "function": "CreateEntity"},
       {"file": "internal/service/entity.go", "line": 80, "function": "Save"}

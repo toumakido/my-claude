@@ -38,6 +38,7 @@ For each function in call_chain:
    - Context variables: `ctx` declarations and assignments
 
 3. **Comment out everything else**:
+   - This includes: `switch`, `case`, `default`, `for`, `range`, `if`, `else` lines (except SDK error checks)
    - Use block comments `/* */` for 3+ consecutive lines
    - Use line comments `//` for single lines or 2-line blocks
    - Preserve code structure and indentation within comments
