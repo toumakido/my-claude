@@ -95,7 +95,9 @@ Use this command when:
    - DO NOT include main.go or router setup in call chain
    - Record endpoint information separately (method, path, handler location)
 
-   Provide the complete call chain from each entry point to this function.
+   **Output format:**
+   Your response MUST be valid JSON only (no markdown, no explanations).
+   Return the complete call chain from each entry point to this function in the JSON format specified in your agent definition.
    ```
 
    **Example Task invocations:**
@@ -105,18 +107,42 @@ Use this command when:
    Task 3: "Trace Insert at internal/service/storage.go:235"
    ```
 
-3. **Integrate agent results**
+3. **Integrate agent results (JSON format)**
+
+   **IMPORTANT:** go-call-chain-tracer agent returns structured JSON output. Parse the JSON to extract chain information.
 
    For each agent result:
-   - Extract entry points (API/Task/CLI) with identifiers
-   - Extract call chains with file:line for each function
-   - **For API entry points:**
-     - Remove main.go from call chain if present
-     - Start call chain from HTTP handler function
-     - Add endpoint object with method, path, and handler reference
-   - Identify SDK operations and classify as Create/Read/Update/Delete
-   - Count SDK operations per entry point
-   - Mark chains without entry points as "SKIP - No entry point"
+
+   a. **Parse JSON output**
+      - Agent returns JSON with structure:
+        ```json
+        {
+          "target_function": {...},
+          "call_chains": [...],
+          "statistics": {...}
+        }
+        ```
+      - Extract `call_chains` array from JSON
+
+   b. **Process each call chain from JSON**
+      - Extract `entry_point_type`, `entry_point_identifier`, `entry_point_location`
+      - Extract `chain` array (each element has `file`, `line`, `function`)
+      - Extract `endpoint` object (for API type only)
+      - Extract `sdk_operations` array (with `service`, `operation`, `type`)
+      - Extract `depth` value
+
+   c. **Transform for .migration-chains.json format**
+      - Convert JSON structure to .migration-chains.json format:
+        - `entry_point_type` → `type`
+        - `entry_point_identifier` → `identifier`
+        - `endpoint` → `endpoint` (keep as-is for API)
+        - `chain` → `call_chain` (keep file:line:function structure)
+        - `sdk_operations` → `sdk_operations` (keep as-is)
+
+   d. **Validation**
+      - Mark chains without entry points as "SKIP - No entry point"
+      - Verify all required fields are present
+      - Count SDK operations per entry point
 
 ### Phase 3: Deduplication
 

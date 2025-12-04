@@ -65,37 +65,57 @@ Execute these steps systematically:
 
 ## Output Format
 
-Provide a structured report with:
+**CRITICAL:** Your final output MUST be valid JSON only. Do NOT include any explanatory text, markdown formatting, or code fences. Output ONLY the raw JSON object below.
 
-### 1. Target Function Summary
-```
-Target Function: FunctionName
-Location: filepath:line
-Signature: [full function signature]
+```json
+{
+  "target_function": {
+    "name": "FunctionName",
+    "location": "filepath:line",
+    "signature": "func (r *Receiver) FunctionName(params) (returns)"
+  },
+  "call_chains": [
+    {
+      "entry_point_type": "API|Task|CLI",
+      "entry_point_identifier": "HandlerName|task-name|command-name",
+      "entry_point_location": "filepath:line",
+      "endpoint": {
+        "method": "GET|POST|...",
+        "path": "/api/path",
+        "handler": "HandlerFunctionName"
+      },
+      "chain": [
+        {"file": "filepath", "line": 123, "function": "FunctionName"},
+        {"file": "filepath", "line": 456, "function": "CallerFunction"}
+      ],
+      "depth": 3,
+      "sdk_operations": [
+        {"service": "DynamoDB|S3|...", "operation": "PutItem|GetObject|...", "type": "Create|Read|Update|Delete"}
+      ]
+    }
+  ],
+  "statistics": {
+    "total_entry_points": 2,
+    "total_unique_callers": 5,
+    "longest_chain_depth": 4,
+    "call_chain_count": 2
+  }
+}
 ```
 
-### 2. Call Chain Tree
-Present each entry point and its path as a text tree:
-```
-Entry Point: main (cmd/api/main.go:45)
-  └─→ StartServer (cmd/api/main.go:67)
-      └─→ SetupRoutes (internal/api/handler/routes.go:23)
-          └─→ RegisterHandlers (internal/api/handler/v1/register.go:15)
-              └─→ GetNextUser (internal/service/user.go:102) 
-```
+**Output requirements:**
+- Raw JSON only, no markdown code fences (```json)
+- No explanatory text before or after the JSON
+- Valid JSON that can be directly parsed by JSON.parse()
+- If no call chains found, return empty array for `call_chains`
 
-### 3. Investigation Log
-Document your search process:
-- Grep commands executed
-- Number of direct callers found
-- Number of entry points identified
-- Any ambiguities or challenges enusered
-
-### 4. Summary Statistics
-- Total entry points: X
-- Total unique callers: Y
-- Longest chain depth: Z
-- Call chain count: N
+**Field descriptions:**
+- `entry_point_type`: "API" for HTTP handlers, "Task" for cmd/*/main.go, "CLI" for CLI commands
+- `entry_point_identifier`: Handler function name, task name, or CLI command name
+- `endpoint`: Only for API type, omit for Task/CLI
+- `chain`: Ordered from entry point to target function
+- `depth`: Number of functions in the chain
+- `sdk_operations`: AWS SDK operations found in the chain (if any)
 
 ## Error Handling
 
