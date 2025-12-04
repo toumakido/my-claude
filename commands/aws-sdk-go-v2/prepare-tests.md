@@ -29,76 +29,55 @@ This command performs:
 
 ## Process
 
-### Phase 1: Analysis (One-pass for all chains)
+### Phase 1: Comment Out Non-Chain Code (Parallel)
 
-Analyze all chains in `.migration-chains.json` in a single pass to collect modification requirements.
+Launch subagents to comment out non-essential code in parallel.
 
-For each chain in `.migration-chains.json`:
+1. **Read `.migration-chains.json`**
+   - Load all chains
+   - Display: "総チェーン数: N個"
 
-1. **Read chain configuration**
-   - Load chain ID, entry point, call chain, SDK operations from `.migration-chains.json`
-   - Display: "=== Analyzing Chain N/M: [type] [identifier] ==="
+2. **Launch comment-out-non-chain-code subagents in parallel**
 
-2. **Analyze all functions in call chain** (use Read tool only, no modifications yet)
+   **IMPORTANT**: Use a single message with multiple Task tool calls to run subagents in parallel.
 
-   For each function in `call_chain` array:
+   For each chain:
+   - Prepare JSON input:
+     ```json
+     {
+       "chain_id": "chain-1",
+       "call_chain": [
+         {"file": "handler.go", "line": 50, "function": "HandleGetEntities"},
+         {"file": "service.go", "line": 100, "function": "GetEntities"}
+       ]
+     }
+     ```
+   - Launch Task tool with:
+     - `subagent_type: "comment-out-non-chain-code"`
+     - `prompt: "Process this chain and comment out non-essential code:\n\n{JSON input}"`
 
-   a. **Read function source** (Read tool)
-      - Load complete function from file:line
-      - Analyze function content (Phase 2 will re-read if needed for Edit tool context)
+3. **Wait for all subagents to complete**
+   - Each subagent will:
+     - Comment out non-chain code
+     - Add dummy values as needed
+     - Ensure compilation succeeds
+   - No output from subagents (they complete silently on success)
 
-   b. **Identify comment-out targets**
+4. **Display Phase 1 summary**
+   ```
+   === Phase 1: コメントアウト完了 ===
+   処理済みチェーン: N個 (並列実行)
 
-      Decision flow:
-      1. Does line initialize SDK client? → KEEP
-      2. Does line construct SDK input struct? → KEEP
-      3. Does line assign data to SDK input fields? → KEEP
-      4. Is line ctx/basic error check? → KEEP
-      5. Is line a function call in current chain's `call_chain` array? → KEEP
-      6. Otherwise (everything else) → COMMENT
+   Phase 2でPre-insertを追加します
+   ```
 
-      KEEP (SDK-related and call chain):
-      - SDK client init: `dynamodb.New()`, `s3.NewFromConfig()`
-      - SDK input construction: `&dynamodb.PutItemInput{...}`
-      - Data for SDK input fields
-      - Context, minimal error check
-      - **Function calls in `call_chain` array from `.migration-chains.json`**
+### Phase 2: Add Pre-Insert Code
 
-      COMMENT (everything else):
-      - **Function calls NOT in `call_chain` array**
-      - Everything else not explicitly kept
+Add test data insertion before Update/Read/Delete SDK operations.
 
-      Note: `call_chain` functions are kept to provide actual values for SDK inputs, reducing dummy value requirements.
+1. **Analyze SDK operations for pre-insert requirements**
 
-      Record: List of code blocks to comment out (file:line, old_string)
-
-   c. **Identify dummy value requirements**
-
-      Note: With `call_chain` criteria, dummy values are rarely needed since functions in `call_chain` execute and return actual values.
-
-      Dummy values are only needed for:
-      - **Non-function initializations**: `time.Now()`, `uuid.New()`, arithmetic operations
-      - **Call chain external values**: Values from functions NOT in `call_chain` but used in SDK inputs
-
-      If commented code returns values used in SDK inputs:
-      - Strings: `"test-value"`
-      - Integers: `1`
-      - UUIDs: `uuid.MustParse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")`
-
-      Record: List of dummy values to add (file:line, type, new_string, reason)
-
-   d. **Analyze execution flow**
-      - Identify conditional branches (if/switch/for)
-      - Check each condition works with dummy/test data
-      - Identify error handling that may trigger prematurely
-      - Check for uninitialized variables
-      - Verify type compatibility with dummy values
-
-      Record: List of execution flow issues (file:line, issue_type, fix_action)
-
-3. **Analyze SDK operations for pre-insert requirements**
-
-   For each SDK operation in chain:
+   For each chain in `.migration-chains.json`:
 
    a. **Determine operation type**
       - Create: PutItem, PutObject, SendEmail, Publish → No pre-insert
@@ -107,106 +86,16 @@ For each chain in `.migration-chains.json`:
       - Delete: DeleteItem, DeleteObject → Pre-insert required
 
    b. **Extract pre-insert parameters** (for Update/Read/Delete only)
-      - Load SDK function source (re-read with Read tool if not already loaded in step 2a)
+      - Load SDK function source from `sdk_operations[].file:line`
       - Extract: table name, key fields, bucket name
-      - Generate pre-insert code structure
+      - Generate pre-insert code
 
-      Record: Pre-insert code to add (file:line, pre_insert_code)
+2. **Apply pre-insert code** (Edit tool)
 
-   c. **Identify SDK operation log positions**
-      - For each SDK operation, locate the operation call and error check
-      - Identify insertion point: after error check, before response processing
-      - Determine appropriate log message based on operation type:
-        - Query/Scan: `log.Printf("[SDK Test] %s succeeded: %%d items", operation, len(resp.Items))`
-        - GetItem: `log.Printf("[SDK Test] %s succeeded: item found=%%v", operation, resp.Item != nil)`
-        - PutItem/UpdateItem: `log.Printf("[SDK Test] %s succeeded", operation)`
-        - DeleteItem: `log.Printf("[SDK Test] %s succeeded", operation)`
-        - TransactWriteItems: `log.Printf("[SDK Test] %s succeeded: %%d items", operation, len(input.TransactItems))`
-        - GetObject (S3): `log.Printf("[SDK Test] %s succeeded: size=%%d", operation, resp.ContentLength)`
-        - PutObject (S3): `log.Printf("[SDK Test] %s succeeded", operation)`
-        - SendEmail (SES): `log.Printf("[SDK Test] %s succeeded: MessageId=%%s", operation, *resp.MessageId)`
-        - Publish (SNS): `log.Printf("[SDK Test] %s succeeded: MessageId=%%s", operation, *resp.MessageId)`
-
-      Record: Log insertion points (file:line, operation, log_code, response_var)
-
-4. **Display analysis summary**
-   ```
-   完了 (N/M): 分析
-   Chain: [type] [identifier]
-   - 関数数: X個
-   - コメントアウト対象: Y個ブロック
-   - ダミー値必要: Z個
-   - 実行フロー問題: W個
-   - Pre-insert必要: P個 (Update/Read/Delete operations)
-   - SDK操作ログ追加: L個
-   ```
-
-5. **After analyzing all chains, display Phase 1 summary**
-   ```
-   === Phase 1: 分析完了 ===
-   処理済みチェーン: N個
-   コメントアウト対象: 合計Y個ブロック
-   ダミー値必要: 合計Z個
-   実行フロー問題: 合計W個
-   Pre-insert生成: 合計P個
-   SDK操作ログ追加: 合計L個
-
-   Phase 2で一括適用します
-   ```
-
-### Phase 2: Application (Batch modifications for all chains)
-
-Apply all modifications collected in Phase 1 in a single batch.
-
-1. **Group modifications by file**
-   - Merge all modifications (comment-outs, dummies, pre-inserts, flow fixes) targeting same file
-   - Sort by line number (descending, highest line first) to avoid line offset issues
-     - Reason: Modifying line 100 before line 50 prevents line 50's offset from changing
-
-2. **Apply comment-out modifications** (Edit tool)
-
-   For each recorded comment-out target from Phase 1:
-   - Apply Edit: Replace old_string with `// ` prefixed version
-   - Display progress: "Commenting out: [file:line]"
-
-   Example:
-   ```go
-   // Old:
-   result, err := repo.GetUser(ctx, id)
-
-   // New:
-   // result, err := repo.GetUser(ctx, id)
-   ```
-
-3. **Apply dummy value additions** (Edit tool)
-
-   Note: With `call_chain` criteria, this step is rarely needed since functions in call_chain execute and return actual values.
-
-   For each recorded dummy value requirement from Phase 1:
-   - Apply Edit: Insert dummy value after commented code
-   - Use type-appropriate values:
-     - Strings: `"test-value"`
-     - Integers: `1`
-     - UUIDs: `uuid.MustParse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")`
-   - Display progress: "Adding dummy: [file:line] ([type]) - [reason]"
-
-4. **Apply execution flow fixes** (Edit tool)
-
-   For each recorded execution flow issue from Phase 1:
-   - Apply Edit based on issue_type:
-     - Conditional branch: Adjust dummy values to pass conditions
-     - Premature error: Comment out error check
-     - Uninitialized variable: Add initialization
-     - Type mismatch: Fix dummy value type
-   - Display progress: "Fixing flow: [file:line] ([issue_type])"
-
-5. **Apply pre-insert code additions** (Edit tool)
-
-   For each recorded pre-insert requirement from Phase 1:
-   - Apply Edit: Insert pre-insert code before SDK call
+   For each operation requiring pre-insert:
+   - Insert pre-insert code before SDK call
    - Use proper indentation matching surrounding code
    - Add required imports if missing
-   - Display progress: "Adding pre-insert: [file:line] ([operation])"
 
    Example for DynamoDB:
    ```go
@@ -225,24 +114,42 @@ Apply all modifications collected in Phase 1 in a single batch.
    }
    ```
 
-6. **Apply SDK operation log additions** (Edit tool)
+3. **Display Phase 2 summary**
+   ```
+   === Phase 2: Pre-insert追加完了 ===
+   Pre-insert追加: P個
 
-   For each recorded log insertion point from Phase 1:
-   - Apply Edit: Insert log statement after SDK call and error check
-   - Use proper indentation matching surrounding code
+   Phase 3でSDK操作ログを追加します
+   ```
+
+### Phase 3: Add SDK Operation Logs
+
+Add logging after SDK operations for runtime verification.
+
+1. **Identify SDK operation log positions**
+
+   For each SDK operation in `.migration-chains.json`:
+   - Locate operation call and error check
+   - Identify insertion point: after error check, before response processing
+   - Determine log message based on operation type:
+     - Query/Scan: `log.Printf("[SDK Test] %s succeeded: %%d items", operation, len(resp.Items))`
+     - GetItem: `log.Printf("[SDK Test] %s succeeded: item found=%%v", operation, resp.Item != nil)`
+     - PutItem/UpdateItem: `log.Printf("[SDK Test] %s succeeded", operation)`
+     - DeleteItem: `log.Printf("[SDK Test] %s succeeded", operation)`
+     - TransactWriteItems: `log.Printf("[SDK Test] %s succeeded: %%d items", operation, len(input.TransactItems))`
+     - GetObject (S3): `log.Printf("[SDK Test] %s succeeded: size=%%d", operation, resp.ContentLength)`
+     - PutObject (S3): `log.Printf("[SDK Test] %s succeeded", operation)`
+     - SendEmail (SES): `log.Printf("[SDK Test] %s succeeded: MessageId=%%s", operation, *resp.MessageId)`
+     - Publish (SNS): `log.Printf("[SDK Test] %s succeeded: MessageId=%%s", operation, *resp.MessageId)`
+
+2. **Apply SDK operation logs** (Edit tool)
+
+   For each SDK operation:
+   - Insert log statement after error check
    - Add `log` package import if missing
-   - Display progress: "Adding log: [file:line] ([operation])"
 
    Example for DynamoDB Query:
    ```go
-   // Before
-   result, err := s.db.Query(ctx, &dynamodb.QueryInput{...})
-   if err != nil {
-       return nil, err
-   }
-   // // Response processing
-   // entities := parseEntities(result.Items)
-
    // After
    result, err := s.db.Query(ctx, &dynamodb.QueryInput{...})
    if err != nil {
@@ -253,41 +160,17 @@ Apply all modifications collected in Phase 1 in a single batch.
    // entities := parseEntities(result.Items)
    ```
 
-   Example for S3 GetObject:
-   ```go
-   // Before
-   resp, err := s.s3.GetObject(ctx, &s3.GetObjectInput{...})
-   if err != nil {
-       return nil, err
-   }
-   // // Process object
-   // data := readObject(resp.Body)
-
-   // After
-   resp, err := s.s3.GetObject(ctx, &s3.GetObjectInput{...})
-   if err != nil {
-       return nil, err
-   }
-   log.Printf("[SDK Test] GetObject succeeded: size=%d bytes", *resp.ContentLength)
-   // // Process object
-   // data := readObject(resp.Body)
+3. **Display Phase 3 summary**
    ```
-
-7. **Display Phase 2 summary**
-   ```
-   === Phase 2: 変更適用完了 ===
-   コメントアウト適用: Y個ブロック
-   ダミー値追加: Z個
-   実行フロー修正: W個
-   Pre-insert追加: P個
+   === Phase 3: SDK操作ログ追加完了 ===
    SDK操作ログ追加: L個
 
-   Phase 3で検証します
+   Phase 4で検証します
    ```
 
-### Phase 3: Verification (Single compilation and completeness checks)
+### Phase 4: Verification (Compilation and Coverage)
 
-Verify all modifications in a single phase with one compilation check.
+Verify compilation and SDK operation coverage.
 
 1. **Compile modified code** (Bash tool)
    - Run: `go build -o /tmp/test-build ./...`
@@ -298,30 +181,14 @@ Verify all modifications in a single phase with one compilation check.
      - Repeat until success
    - Display: "コンパイル成功"
 
-2. **Verify comment-out completeness** (Grep tool)
-
-   a. **Verify external service calls are commented**
-      - Pattern: `pattern: "http\\.(Get|Post|Client)|grpc\\.(Dial|NewClient)"`
-      - Options: `output_mode: "content"`, `-C: 5`, `glob: "!(*_test.go)"`
-      - For each match in modified files (from `.migration-chains.json`):
-        - Check if line starts with `//`
-        - If uncommented in modified chain functions: ERROR with list of uncommented lines
-
-   b. **Verify response processing is minimized**
-      - Pattern: `pattern: "parseAttributes|ToEntity|for.*resp\\.(Items|Records)"`
-      - Options: `output_mode: "content"`, `glob: "!(*_test.go)"`
-      - For each match in modified files:
-        - Check if commented or replaced with simple log
-        - If complex processing remains in modified chain functions: ERROR with list of remaining processing
-
-3. **Verify pre-insert completeness** (Grep tool)
+2. **Verify pre-insert completeness** (Grep tool)
    - Load Update/Read/Delete operations from `.migration-chains.json`
    - For each operation:
      - Grep for operation in SDK function file with `-B: 20`
      - Check preceding 20 lines for pre-insert comment pattern: `// Pre-insert test data`
      - If missing: ERROR with list of missing pre-inserts
 
-4. **Verify execution flow and SDK operation coverage** (Read tool, static analysis)
+3. **Verify execution flow and SDK operation coverage** (Read tool, static analysis)
 
    For each chain in `.migration-chains.json`:
 
@@ -393,27 +260,138 @@ Verify all modifications in a single phase with one compilation check.
       修正中...
       ```
 
-5. **Display Phase 3 summary**
+4. **Display Phase 4 summary**
    ```
-   === Phase 3: 検証完了 ===
+   === Phase 4: 検証完了 ===
    - コンパイル: 成功
-   - 外部サービス呼び出し: すべてコメント済み
-   - レスポンス処理: 最小化済み
-   - Pre-insert: すべて生成済み (N operations)
+   - Pre-insert: すべて生成済み (P operations)
    - 実行フロー: 修正完了 (M chains with fixes)
    - SDK操作カバレッジ: X/X 操作が到達可能 (100%)
+
+   Phase 5で検証手順書を生成します
+   ```
+
+### Phase 5: Verification Document Generation
+
+Generate execution procedures for testing in AWS environment.
+
+1. **Load chain data from `.migration-chains.json`** (Read tool)
+
+2. **For each chain, generate execution command**:
+
+   **API endpoints:**
+   ```bash
+   curl -X [METHOD] https://[host]/[path] \
+     -H "Content-Type: application/json" \
+     -H "Authorization: Bearer $TOKEN" \
+     -d '{"key":"value"}'
+   ```
+
+   **ECS Tasks:**
+   ```bash
+   aws ecs run-task \
+     --cluster [cluster-name] \
+     --task-definition [task-name]:latest \
+     --launch-type FARGATE \
+     --network-configuration "awsvpcConfiguration={subnets=[subnet-xxx],securityGroups=[sg-xxx],assignPublicIp=ENABLED}"
+   ```
+
+   **CLI commands:**
+   ```bash
+   ./bin/[command] [args]
+   ```
+
+3. **Generate X-Ray verification points**
+
+   For each chain's SDK operations:
+   - Extract service, operation, and resource from `sdk_operations` array
+   - List expected operations with counts:
+     - Query/Scan: Include item count
+     - GetItem: Include found status
+     - PutItem/UpdateItem/DeleteItem: Basic success
+     - TransactWriteItems: Include transaction count
+     - S3 operations: Include size/object info
+     - SES/SNS: Include MessageId
+
+4. **Write `aws-verification-procedures.md`** (Write tool)
+
+   Document structure:
+   ```markdown
+   # AWS SDK v2 Migration Verification Procedures
+
+   ## Summary
+   - Total chains: N
+   - Total SDK operations: M
+   - API endpoints: A
+   - ECS tasks: B
+   - CLI commands: C
+
+   ## Verification Steps
+   1. For each chain below:
+      - Execute command
+      - Check X-Ray traces in AWS Console
+      - Verify expected SDK operations appear
+      - Confirm no errors in CloudWatch Logs
+   2. Document results
+
+   ## Chain 1: [type] [identifier]
+
+   ### コールチェーン
+   Entry: [type] [identifier]
+   → [file:line] EntryFunc
+   → [file:line] IntermediateFunc
+   → [file:line] SDKFunc ← [Service] [Operation]
+
+   ### 実行コマンド
+   ```bash
+   [execution command]
+   ```
+
+   ### X-Ray確認ポイント
+   - [Service] [Operation] × N回 ([resource])
+   ```
+
+   For chains with multiple SDK operations:
+   ```markdown
+   ## Chain N: [type] [identifier] [★ Multiple SDK: M operations]
+
+   ### コールチェーン
+   Entry: [type] [identifier]
+   → [file:line] EntryFunc
+   → [file:line] IntermediateFunc
+
+   SDK Functions:
+   A. [file:line] SDKFunc1 ← [Service] [Op1]
+   B. [file:line] SDKFunc2 ← [Service] [Op2]
+
+   ### 実行コマンド
+   ```bash
+   [execution command]
+   ```
+
+   ### X-Ray確認ポイント
+   - [Service] [Op1] × N回
+   - [Service] [Op2] × M回
+   - Data flow: Op1 → Op2
+   ```
+
+5. **Display Phase 5 summary**
+   ```
+   === Phase 5: 検証手順書生成完了 ===
+   出力ファイル: aws-verification-procedures.md
+   - 総チェーン数: N個
+   - 総SDK操作数: M個
+   - API: A個, Task: B個, CLI: C個
    ```
 
 6. **Display final completion**
    ```
-   === Phase 1-3 完了 ===
-   処理済みチェーン: N個
-   コメントアウトブロック: X個
-   Pre-insert生成: Y個
-   SDK操作ログ追加: L個
-   実行フロー修正: W個
-   SDK操作カバレッジ: Z/Z 操作 (100%)
-   最終コンパイル: 成功
+   === 全Phase完了 ===
+   Phase 1: コメントアウト (並列実行) - N chains
+   Phase 2: Pre-insert追加 - P operations
+   Phase 3: SDK操作ログ追加 - L logs
+   Phase 4: 検証 - コンパイル成功, SDK操作カバレッジ 100%
+   Phase 5: 検証手順書生成 - aws-verification-procedures.md
 
    Next: See "Next Steps" section below
    ```
@@ -423,41 +401,33 @@ Verify all modifications in a single phase with one compilation check.
 **".migration-chains.json not found"**
 - Solution: Run `/extract-sdk-chains` command first
 
-**Phase 1 analysis errors**
-- Cause: Unable to read function source from file:line
-- Solution: Verify `.migration-chains.json` contains correct file paths and line numbers
+**Phase 1: Subagent fails**
+- Cause: comment-out-non-chain-code subagent encounters errors
+- Solution: Check subagent error output; may need to fix file paths in `.migration-chains.json` or resolve compilation issues manually
 
-**Phase 2 application errors**
-- Cause: Edit tool fails to find old_string
-- Solution: Check Phase 1 recorded correct code blocks; file may have changed since Phase 1
+**Phase 2: Pre-insert generation fails**
+- Cause: Unable to extract table name or key fields from SDK operation
+- Solution: Manually inspect SDK operation code; verify Input struct contains required fields
 
-**Phase 3 compilation fails**
+**Phase 3: SDK log insertion fails**
+- Cause: Unable to locate SDK operation call or error check
+- Solution: Verify SDK operation exists at file:line specified in `.migration-chains.json`
+
+**Phase 4: Compilation fails**
 - Cause: Unused vars, undefined refs, type mismatches, missing imports
-- Solution: Command auto-fixes during Phase 3 step 1; applies Edit and retries compilation
+- Solution: Command auto-fixes; applies Edit and retries compilation
 
-**Phase 3 comment-out verification failed**
-- Cause: HTTP/gRPC calls remain uncommented in modified functions
-- Solution: Review Phase 1 analysis; may need to adjust KEEP/COMMENT classification logic
-
-**Phase 3 response processing verification failed**
-- Cause: Complex response parsing (parseAttributes, ToEntity) remains
-- Solution: Review Phase 1 analysis; response processing should be marked as COMMENT
-
-**Phase 3 pre-insert verification failed**
+**Phase 4: Pre-insert verification failed**
 - Cause: Update/Read/Delete operation without pre-insert code
-- Solution: Check Phase 1 operation type classification and Phase 2 application logs
+- Solution: Check Phase 2 operation type classification and application logs
 
-**Phase 3 execution flow verification failed**
+**Phase 4: Execution flow verification failed**
 - Cause: SDK operations unreachable due to empty return values
-- Solution: Phase 3 step 4d auto-fixes by adding dummy data; re-verification runs automatically (max 3 iterations)
+- Solution: Phase 4 step 3d auto-fixes by adding dummy data; re-verification runs automatically (max 3 iterations)
 
-**Phase 3 SDK operation coverage incomplete**
+**Phase 4: SDK operation coverage incomplete**
 - Cause: Not all SDK operations in chain are reachable from entry point
-- Solution: Phase 3 step 4 detects and fixes automatically; check modified functions for correct dummy data structure
-
-**Execution flow issues**
-- Cause: Dummy values don't satisfy conditional branches
-- Solution: Phase 1 identifies issues, Phase 2 applies fixes automatically; Phase 3 step 4 provides additional verification and auto-fix
+- Solution: Phase 4 step 3 detects and fixes automatically; check modified functions for correct dummy data structure
 
 ## Example
 
@@ -767,42 +737,39 @@ Chain 1: 3/3 操作が到達可能 [OK]
 - Better test realism: SDK inputs use actual values instead of dummies
 - Traceability: Easy to understand why code was kept or commented
 
+**Parallel subagent execution:**
+- Phase 1: All chains processed simultaneously via comment-out-non-chain-code subagent
+- Dramatic speed improvement: 10 chains processed in parallel vs sequential
+- Independent compilation: Each subagent ensures its chain compiles
+- Fault isolation: One chain's failure doesn't block others
+
 **Optimized processing flow:**
-- Phase 1: Analyze all chains in one pass (single file read per function)
-- Phase 2: Apply all modifications in batch (grouped by file)
-- Phase 3: Single compilation check (was N×3 compilations before)
+- Phase 1: Parallel comment-out (N subagents running simultaneously)
+- Phase 2: Pre-insert addition (sequential, depends on Phase 1 completion)
+- Phase 3: SDK log addition (sequential)
+- Phase 4: Verification (single compilation check)
+- Phase 5: Document generation
 
 **Performance improvements:**
-- File I/O: 1 read per function (was 3× before)
-- Compilation: 1 time total (was 3N times before, N = chain count)
-- No sub-agent usage: Direct tool calls only (no Task tool)
+- Parallel execution: N chains processed simultaneously
+- Modular subagents: Reusable comment-out logic
 - Example: 10 chains with 3 functions each
-  - Before: 90 file reads, 30+ compilations
-  - After: 30 file reads, 1 compilation
+  - Sequential: ~10 minutes (1 min per chain)
+  - Parallel: ~2 minutes (all chains simultaneously + final verification)
 
-**Benefits:**
-- Faster execution (seconds vs minutes per chain)
-- No context accumulation
-- Predictable behavior
-- Clear separation: Analysis → Application → Verification
-
-**Execution flow verification (Phase 3 step 4):**
+**Execution flow verification (Phase 4 step 3):**
 - Complete SDK operation testing: All SDK operations in chain are reachable and testable
 - Automatic correction: Flow issues detected and fixed without manual intervention
 - Improved verification reliability: Ensures not just compilation but actual execution paths
 - Reduced debugging time: Prevents discovering untested SDK operations after deployment
 - Coverage guarantee: All operations in `.migration-chains.json` verified as reachable
 
-**SDK operation logging (Phase 2 step 6):**
+**SDK operation logging (Phase 3):**
 - Runtime verification: Confirms SDK operations actually execute and return responses
 - Operation-specific output: Logs relevant data (item counts, sizes, message IDs) for each operation type
 - Easy debugging: Clear `[SDK Test]` prefix identifies test-related logs in application output
-- No manual intervention: Logs automatically added after all SDK operations during Phase 2
+- No manual intervention: Logs automatically added after all SDK operations
 - Production-ready format: Uses standard `log.Printf` compatible with existing logging infrastructure
-
-### Phase 4: Verification Document Generation
-
-Generate execution procedures for testing in AWS environment.
 
 1. **Load chain data from `.migration-chains.json`** (Read tool)
 

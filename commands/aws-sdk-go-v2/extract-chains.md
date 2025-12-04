@@ -254,7 +254,7 @@ Output (.migration-chains.json):
 ## Next Steps
 
 1. Review `.migration-chains.json`
-2. Run `/prepare-tests` command to:
+2. Run `/aws-sdk-go-v2:prepare-tests` command to:
    - Modify code for testing
    - Generate AWS verification procedures
 3. Deploy to test environment and execute verification procedures
