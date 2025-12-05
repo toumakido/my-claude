@@ -62,6 +62,11 @@ Execute these steps systematically:
 - Construct complete paths from each entry point to target function
 - Format: EntryPoint → Caller1 → Caller2 → ... → TargetFunction
 - Include file:line for each node in the chain
+- **Track caller relationships:**
+  - For entry point function: `caller: null`
+  - For each subsequent function: `caller: "ParentFunctionName"`
+  - Parent is the function that directly calls the current function
+  - Example: If A calls B, and B calls C, then B's caller is "A", C's caller is "B"
 
 ## Output Format
 
@@ -85,8 +90,9 @@ Execute these steps systematically:
         "handler": "HandlerFunctionName"
       },
       "chain": [
-        {"file": "filepath", "line": 123, "function": "FunctionName"},
-        {"file": "filepath", "line": 456, "function": "CallerFunction"}
+        {"file": "filepath", "line": 123, "function": "EntryPointFunc", "caller": null},
+        {"file": "filepath", "line": 456, "function": "IntermediateFunc", "caller": "EntryPointFunc"},
+        {"file": "filepath", "line": 789, "function": "TargetFunc", "caller": "IntermediateFunc"}
       ],
       "depth": 3,
       "sdk_operations": [
@@ -114,6 +120,10 @@ Execute these steps systematically:
 - `entry_point_identifier`: Handler function name, task name, or CLI command name
 - `endpoint`: Only for API type, omit for Task/CLI
 - `chain`: Ordered from entry point to target function
+  - `file`: File path of the function
+  - `line`: Line number where function is defined
+  - `function`: Function name
+  - `caller`: Name of the function that calls this function (null for entry point)
 - `depth`: Number of functions in the chain
 - `sdk_operations`: AWS SDK operations found in the chain (if any)
 

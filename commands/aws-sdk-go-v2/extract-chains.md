@@ -126,7 +126,7 @@ Use this command when:
 
    b. **Process each call chain from JSON**
       - Extract `entry_point_type`, `entry_point_identifier`, `entry_point_location`
-      - Extract `chain` array (each element has `file`, `line`, `function`)
+      - Extract `chain` array (each element has `file`, `line`, `function`, `caller`)
       - Extract `endpoint` object (for API type only)
       - Extract `sdk_operations` array (with `service`, `operation`, `type`)
       - Extract `depth` value
@@ -136,7 +136,7 @@ Use this command when:
         - `entry_point_type` → `type`
         - `entry_point_identifier` → `identifier`
         - `endpoint` → `endpoint` (keep as-is for API)
-        - `chain` → `call_chain` (keep file:line:function structure)
+        - `chain` → `call_chain` (keep file:line:function:caller structure)
         - `sdk_operations` → `sdk_operations` (keep as-is)
 
    d. **Validation**
@@ -282,8 +282,8 @@ Output (.migration-chains.json):
       "handler": "internal/api/handler.go:50:CreateEntity"
     },
     "call_chain": [
-      {"file": "internal/api/handler.go", "line": 50, "function": "CreateEntity"},
-      {"file": "internal/service/entity.go", "line": 80, "function": "Save"}
+      {"file": "internal/api/handler.go", "line": 50, "function": "CreateEntity", "caller": null},
+      {"file": "internal/service/entity.go", "line": 80, "function": "Save", "caller": "CreateEntity"}
     ],
     "sdk_operations": [{"service": "DynamoDB", "operation": "PutItem", "type": "Create"}]
   }],

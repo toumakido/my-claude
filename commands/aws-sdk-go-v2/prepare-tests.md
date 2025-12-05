@@ -47,8 +47,8 @@ Launch subagents to comment out non-essential code in parallel.
      {
        "chain_id": "chain-1",
        "call_chain": [
-         {"file": "handler.go", "line": 50, "function": "HandleGetEntities"},
-         {"file": "service.go", "line": 100, "function": "GetEntities"}
+         {"file": "handler.go", "line": 50, "function": "HandleGetEntities", "caller": null},
+         {"file": "service.go", "line": 100, "function": "GetEntities", "caller": "HandleGetEntities"}
        ]
      }
      ```
@@ -440,7 +440,7 @@ Input (.migration-chains.json):
 {
   "chains": [{
     "call_chain": [
-      {"file": "internal/service/entity.go", "line": 50, "function": "GetEntities"}
+      {"file": "internal/service/entity.go", "line": 50, "function": "GetEntities", "caller": null}
     ],
     "sdk_operations": [{
       "file": "internal/service/entity.go",
@@ -526,9 +526,9 @@ Input (.migration-chains.json):
 {
   "chains": [{
     "call_chain": [
-      {"file": "internal/service/entity.go", "line": 50, "function": "GetEntities"},
-      {"file": "internal/repository/user.go", "line": 20, "function": "GetUser"},
-      {"file": "internal/service/date.go", "line": 10, "function": "GetBusinessDate"}
+      {"file": "internal/service/entity.go", "line": 50, "function": "GetEntities", "caller": null},
+      {"file": "internal/repository/user.go", "line": 20, "function": "GetUser", "caller": "GetEntities"},
+      {"file": "internal/service/date.go", "line": 10, "function": "GetBusinessDate", "caller": "GetEntities"}
     ],
     "sdk_operations": [{
       "file": "internal/service/entity.go",
@@ -614,8 +614,8 @@ Input (.migration-chains.json):
 {
   "chains": [{
     "call_chain": [
-      {"file": "handler.go", "line": 50, "function": "ProcessEntities"},
-      {"file": "service.go", "line": 100, "function": "GetEntitiesByStatus"}
+      {"file": "handler.go", "line": 50, "function": "ProcessEntities", "caller": null},
+      {"file": "service.go", "line": 100, "function": "GetEntitiesByStatus", "caller": "ProcessEntities"}
     ],
     "sdk_operations": [
       {"file": "service.go", "line": 110, "operation": "Query", "type": "Read"},
