@@ -5,12 +5,11 @@ Output language: Japanese, formal business tone
 ## Process
 
 1. Analyze prompt, determine type (bug/feature/enhancement)
-2. Check duplicates: `gh issue list --search "$KEYWORDS"`
-3. Use AskUserQuestion for minimal required info
-4. Create title format: `[Bug] ログイン時に無限ループが発生` or `[Feature] ダークモード対応`
-5. Create body using templates below
-6. Show to user for confirmation
-7. Create with `gh issue create`
+2. Use AskUserQuestion for minimal required info
+3. Create title format: `[Bug] ログイン時に無限ループが発生` or `[Feature] ダークモード対応`
+4. Create body using templates below
+5. Show to user for confirmation
+6. Create with `gh issue create`
 
 ## Templates
 
@@ -55,11 +54,6 @@ Enhancement:
 ## 期待される改善結果
 [expected improvement]
 ```
-
-## Labels
-
-Type: bug, enhancement, feature
-Priority: priority:high, priority:medium, priority:low
 
 ## Follow-up
 

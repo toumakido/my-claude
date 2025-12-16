@@ -8,27 +8,22 @@ Transform vague/incomplete issues into format that `/work-on-issue` can work wit
 
 ## Process
 
-1. Fetch issue details in parallel (independent):
-   - `gh issue view $ARGUMENTS --json title,body,labels,comments`
-   - Check for duplicates: `gh issue list --search "$KEYWORDS"` (if title suggests common issue)
+1. Fetch issue details:
+   - `gh issue view $ARGUMENTS --json title,body,comments`
 2. Check completeness: problem definition, reproduction steps (bug), expected/actual behavior (bug), background/purpose (feature), environment info
 3. Use AskUserQuestion for missing info
 4. Create structured body using templates below
 5. Improve title: `バグがある` → `[Bug] ログイン時に認証エラー`, `機能追加` → `[Feature] ダークモード対応`
-6. Optimize labels: bug/enhancement/feature, priority:high/medium/low
-7. Show to user for confirmation
-8. Update issue (execute commands sequentially):
+6. Show to user for confirmation
+7. Update issue (execute commands sequentially):
 ```bash
 gh issue edit $ARGUMENTS --title "new title"
 gh issue edit $ARGUMENTS --body "$(cat <<'EOF'
 [new body]
 EOF
 )"
-# Remove existing labels first, then add new ones to ensure clean state
-gh issue edit $ARGUMENTS --remove-label "bug,enhancement,feature,priority:high,priority:medium,priority:low" 2>/dev/null || true
-gh issue edit $ARGUMENTS --add-label "label1,label2"
 ```
-9. Show issue URL and suggest `/work-on-issue $ARGUMENTS`
+8. Show issue URL and suggest `/work-on-issue $ARGUMENTS`
 
 ## Templates
 
