@@ -31,7 +31,7 @@ Fixes #$ISSUE_NUMBER
 EOF
 )"
 ```
-8. Create PR with `gh pr create`, include: problem summary, fix details, test method, screenshots (if UI), Fixes #$ISSUE_NUMBER
+8. Create PR following pr-creator skill, include `Fixes #$ISSUE_NUMBER`
 9. Output PR URL: `https://github.com/user/repo/pull/123`
 
 ## Error Handling
