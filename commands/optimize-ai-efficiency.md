@@ -35,9 +35,11 @@ Output language: Japanese, formal business tone
    - Stage modified files only (from target list)
    - Create commit with format specified in CLAUDE.md (no emoji suffixes)
 
-8. Create PR:
-   - If $ARGUMENTS was empty: `gh pr create --repo toumakido/my-claude --title "optimize: AI efficiency improvements (YYYYMMDD)"`
-   - If $ARGUMENTS was specified: `gh pr create --repo toumakido/my-claude --title "optimize: AI efficiency for [file names] (YYYYMMDD)"`
+8. Create PR using pr-creator skill:
+   - Title format:
+     - If $ARGUMENTS was empty: "optimize: AI efficiency improvements (YYYYMMDD)"
+     - If $ARGUMENTS was specified: "optimize: AI efficiency for [file names] (YYYYMMDD)"
+   - Body format follows PR Format section below
 
 9. Display PR URL and summary
 
