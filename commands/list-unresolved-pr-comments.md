@@ -26,8 +26,11 @@ args:
 
 2. **GraphQL クエリの実行**
 
-   以下の bash コマンドで全ページのデータを取得:
+   以下のbashスクリプトを**一時ファイルに書き出してから実行**します:
+
    ```bash
+   cat > /tmp/fetch_pr_comments.sh << 'SCRIPT_EOF'
+   #!/bin/bash
    owner="手順1で取得したowner"
    repo="手順1で取得したrepo"
    pr_number="手順1で取得したPR番号"
@@ -95,7 +98,14 @@ args:
      fi
      cursor=$(echo "$result" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor')
    done
+
+   echo "$all_results"
+   SCRIPT_EOF
+
+   bash /tmp/fetch_pr_comments.sh
    ```
+
+   **理由**: Claude Code の Bash tool では複数行のwhile loopを含む複雑なスクリプトを直接実行すると構文エラーが発生することがあるため、一時ファイル経由での実行を推奨します。
 
 3. **結果の処理**
 
@@ -112,10 +122,14 @@ args:
 ```
 PR #{pr_number} の未解決コメント: {total}件
 
+---
+
 {path}:{line}
 著者: {author.login} | Outdated: {isOutdated}
 要約: {コメント本文の内容をわかりやすく要約した説明}
 → https://github.com/{owner}/{repo}/pull/{pr_number}#discussion_r{databaseId}
+
+---
 
 (繰り返し)
 ```
