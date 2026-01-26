@@ -1,3 +1,8 @@
+---
+name: restructure-issue
+description: Restructure existing GitHub issue to clarify problem definition
+---
+
 Restructure existing GitHub issue $ARGUMENTS to clarify problem definition
 
 Output language: Japanese, formal business tone

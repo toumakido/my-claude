@@ -1,3 +1,8 @@
+---
+name: work-on-issue
+description: Analyze and fix GitHub issue
+---
+
 Analyze and fix GitHub issue $ARGUMENTS
 
 Output language: Japanese, formal business tone

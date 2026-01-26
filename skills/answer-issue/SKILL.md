@@ -1,3 +1,8 @@
+---
+name: answer-issue
+description: Efficiently answer question about GitHub issue
+---
+
 Efficiently answer question about GitHub issue $ARGUMENTS
 
 Output language: Japanese, formal business tone

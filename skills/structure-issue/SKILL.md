@@ -1,3 +1,8 @@
+---
+name: structure-issue
+description: Create clear GitHub issue from user prompt
+---
+
 Create clear GitHub issue from user prompt: $ARGUMENTS
 
 Output language: Japanese, formal business tone

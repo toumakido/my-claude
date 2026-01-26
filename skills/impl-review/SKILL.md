@@ -1,3 +1,8 @@
+---
+name: impl-review
+description: GitHub PR Review Comment Implementation
+---
+
 # GitHub PR Review Comment Implementation
 
 GitHub PRのレビューコメントURLから指摘事項を分析し、実装まで行います。

@@ -1,18 +1,24 @@
-Analyze command usage and create improvement proposal issue
+---
+name: improve-command
+description: Analyze skill usage and create improvement proposal issue
+disable-model-invocation: true
+---
+
+Analyze skill usage and create improvement proposal issue
 
 Output language: Japanese, formal business tone
 
 ## Prerequisites
 
 - gh CLI installed and authenticated
-- Must be executed in same conversation session after using target command
-- Working repository: Can be any repository where the command was used
+- Must be executed in same conversation session after using target skill
+- Working repository: Can be any repository where the skill was used
 - Issue target repository: https://github.com/toumakido/my-claude (determined dynamically or confirmed with user)
 
 ## Parameters
 
-- `$ARGUMENTS`: Target command name to improve (e.g., `migrate-aws-sdk`, `review-pr`, `improve-command`)
-  - Must correspond to a file in `commands/` directory (without `.md` extension)
+- `$ARGUMENTS`: Target skill name to improve (e.g., `migrate-aws-sdk`, `review-pr`, `improve-command`)
+  - Must correspond to a file in `skills/` directory (without `/SKILL.md` path)
   - Can be used recursively to improve improve-command itself
 
 ## Usage
@@ -24,21 +30,21 @@ Output language: Japanese, formal business tone
 
 ## Process
 
-1. Validate target command:
-   - Check if `commands/<command-name>.md` exists using Read tool
-   - If not found: Display error and list available commands (see Error Handling)
+1. Validate target skill:
+   - Check if `skills/<skill-name>/SKILL.md` exists using Read tool
+   - If not found: Display error and list available skills (see Error Handling)
 2. Analyze conversation history:
-   - Identify when target command was executed (search for `/command-name` in conversation)
+   - Identify when target skill was executed (search for `/skill-name` in conversation)
    - Extract problems encountered during/after execution
    - Identify missing patterns or guidance
-   - Note additional steps required beyond command specification
+   - Note additional steps required beyond skill specification
    - Find workarounds or fixes applied
 3. Analyze improvement opportunities from conversation history:
    - User corrections or指摘 (e.g., "周りのフォーマットに合わせて") - indicates missing style guidelines
    - Multiple Edit rejections indicating unclear requirements - count rejections with same file
    - Workarounds or manual interventions required - user ran commands directly
-   - Additional questions needed during execution - count AskUserQuestion tool calls during command execution
-   - Post-command fixes by user - commits/edits after command completion
+   - Additional questions needed during execution - count AskUserQuestion tool calls during skill execution
+   - Post-skill fixes by user - commits/edits after skill completion
 
    **Check repository type** (for reference links and generalization in later steps):
    - Run: `gh repo view --json isPrivate -q .isPrivate`
@@ -53,23 +59,23 @@ Output language: Japanese, formal business tone
    - More efficient approaches
 4.5. Categorize issues by improvement scope:
 
-   **Purpose**: Distinguish between command specification issues and implementation-phase issues
+   **Purpose**: Distinguish between skill specification issues and implementation-phase issues
 
    **Categories**:
 
-   1. **Command specification issues** (Should be included in improvement proposal):
-      - Missing or unclear steps in command process
-      - Insufficient guidance or examples in command documentation
-      - Lack of error handling patterns in command specification
+   1. **Skill specification issues** (Should be included in improvement proposal):
+      - Missing or unclear steps in skill process
+      - Insufficient guidance or examples in skill documentation
+      - Lack of error handling patterns in skill specification
       - Missing validation steps
       - Unclear decision criteria (e.g., when to apply certain patterns)
 
       Examples:
-      - "Command doesn't specify how to handle duplicate test data"
+      - "Skill doesn't specify how to handle duplicate test data"
       - "No guidance on determining test data distribution strategy"
       - "Missing step for validating type information"
 
-   2. **Implementation-phase issues** (Should be excluded from command specification):
+   2. **Implementation-phase issues** (Should be excluded from skill specification):
       - Technology-specific breaking changes (e.g., SDK version differences)
       - Library-specific behavior patterns
       - Domain-specific business logic
@@ -82,15 +88,15 @@ Output language: Japanese, formal business tone
 
    **Action**:
    - Review all identified issues and categorize them
-   - Only include command specification issues in improvement proposal
+   - Only include skill specification issues in improvement proposal
    - Document excluded implementation-phase issues separately (if requested by user)
 
 4.6. Evaluate severity and confirm with user:
    - Severity levels:
-     - Critical/Important: コマンド仕様の明確な不足、複数回の指摘 → Proceed to step 5
+     - Critical/Important: スキル仕様の明確な不足、複数回の指摘 → Proceed to step 5
      - Nice-to-have/None: 軽微な改善、1回のみの指摘、改善点なし → Use AskUserQuestion to confirm before proceeding to step 5
 5. Generate structured issue content (if confirmed):
-   - Title: `<command-name>.md の改善提案: [主要な改善点の要約]`
+   - Title: `<skill-name>.md の改善提案: [主要な改善点の要約]`
    - Body sections:
      - 概要: Brief summary of improvements
      - 実際に発生した問題: Concrete problems encountered
@@ -276,7 +282,7 @@ Output language: Japanese, formal business tone
 ```markdown
 ## 概要
 
-`commands/<command-name>.md` コマンドを実際のプロジェクトで使用した結果、いくつかの重要な改善点が判明しました。
+`skills/<skill-name>/SKILL.md` スキルを実際のプロジェクトで使用した結果、いくつかの重要な改善点が判明しました。
 
 ## 実際に発生した問題
 
@@ -318,10 +324,10 @@ Output language: Japanese, formal business tone
 - Look for multiple commits on same topic (indicates iterative fixes)
 - Check PR review comments for gaps in initial implementation
 - Identify patterns where manual intervention was required
-- Note deviations from command specification
+- Note deviations from skill specification
 
 ### Extracting Improvements
-- Compare command specification with actual implementation steps
+- Compare skill specification with actual implementation steps
 - Identify missing error handling patterns
 - Note service-specific details not covered
 - Consider validation steps that could prevent issues
@@ -333,8 +339,8 @@ Output language: Japanese, formal business tone
 
 ## Error Handling
 
-- Command file not found: Display error and list available commands
-- No recent usage found: Ask user to confirm command was used in current session
+- Skill file not found: Display error and list available skills
+- No recent usage found: Ask user to confirm skill was used in current session
 - No git history: Warn user but continue with conversation analysis only
 - gh CLI error: Display error and ask user to check authentication
 
@@ -402,7 +408,7 @@ func (repo *EntityRepository) FetchEntities(ctx context.Context, filterKey strin
 
 ## Notes
 
-- This command works best when executed immediately after target command usage
+- This skill works best when executed immediately after target skill usage
 - Longer conversation history provides more context for analysis
 - Include specific code examples in proposals for clarity
 - For public repositories: Include PR/commit links as evidence

@@ -1,3 +1,8 @@
+---
+name: review-pr
+description: Review GitHub Pull Request and provide insights for human reviewers
+---
+
 Review GitHub Pull Request and provide insights for human reviewers: $ARGUMENTS
 
 Output language: Japanese, formal business tone
