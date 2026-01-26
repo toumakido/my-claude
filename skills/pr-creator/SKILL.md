@@ -13,7 +13,11 @@ Guides PR creation by confirming whether to create as draft before executing the
 
 When the user requests PR creation:
 
-1. **Confirm draft status**: Use AskUserQuestion to ask whether to create the PR as draft
+1. **Check for PR template**: Look for `.github/pull_request_template.md` in the repository
+   - If exists: Read the template and use it as the structure for the PR description
+   - If not exists: Follow the default guidelines below
+
+2. **Confirm draft status**: Use AskUserQuestion to ask whether to create the PR as draft
 
    ```
    Question: "Should this PR be created as a draft?"
@@ -22,12 +26,18 @@ When the user requests PR creation:
    - "No, create as ready for review" → Execute without --draft flag
    ```
 
-2. **Execute gh pr create**: Based on the user's choice, run the appropriate command:
+3. **Execute gh pr create**: Based on the user's choice, run the appropriate command:
    - Draft: `gh pr create --draft --title "..." --body "..."`
    - Ready: `gh pr create --title "..." --body "..."`
 
 ## PR Description Guidelines
 
+### When PR template exists (.github/pull_request_template.md)
+- Follow the template structure exactly
+- Fill in all sections present in the template
+- Preserve any checkboxes, headings, or formatting from the template
+
+### When no PR template exists
 Write concise, minimal descriptions:
 
 - **No fixed format sections** (avoid ## Summary, ## Test plan, etc.)
