@@ -5,8 +5,6 @@ description: Create clear GitHub issue from user prompt
 
 Create clear GitHub issue from user prompt: $ARGUMENTS
 
-Output language: Japanese, formal business tone
-
 ## Process
 
 1. Analyze prompt, determine type (bug/feature/enhancement)
@@ -18,47 +16,9 @@ Output language: Japanese, formal business tone
 
 ## Templates
 
-Bug:
-```
-## 概要
-[brief description]
-
-## 再現手順
-1. [step]
-
-## 期待される動作
-[expected]
-
-## 実際の動作
-[actual]
-
-## 環境情報
-- OS: [e.g. macOS 14.0]
-```
-
-Feature:
-```
-## 概要
-[brief description]
-
-## 背景・目的
-[why needed]
-
-## 期待される動作
-[how it should work]
-```
-
-Enhancement:
-```
-## 概要
-[brief description]
-
-## 現状の問題点
-[current issue]
-
-## 期待される改善結果
-[expected improvement]
-```
+- Bug: 概要, 再現手順, 期待される動作, 実際の動作, 環境情報
+- Feature: 概要, 背景・目的, 期待される動作
+- Enhancement: 概要, 現状の問題点, 期待される改善結果
 
 ## Follow-up
 

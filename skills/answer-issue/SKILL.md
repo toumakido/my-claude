@@ -5,11 +5,7 @@ description: Efficiently answer question about GitHub issue
 
 Efficiently answer question about GitHub issue $ARGUMENTS
 
-Output language: Japanese, formal business tone
-
 ## Prerequisites
-
-- gh CLI installed and authenticated
 - $ARGUMENTS format: `<issue_number> <user_prompt>`
   - Example: `123 この問題の原因を調査して`
   - Example: `456 どのファイルが関連しているか教えて`
@@ -55,57 +51,6 @@ Efficiently investigate and answer questions about structured GitHub issues with
    [actionable recommendations]
    ```
 7. If fix is needed, suggest: `/work-on-issue <issue_number>`
-
-## Efficiency Guidelines
-
-- Investigate and answer only (do not implement fixes unless explicitly requested)
-- Use Task tool with subagent_type=Explore for codebase exploration when searching by concept (NOT when searching for specific known names)
-- Use Grep/Glob directly when searching for specific file names, function names, or class names
-- Provide file:line references for easy navigation
-- Read only relevant files (leverage structured issue context to narrow scope)
-- Do not run unnecessary tests or build commands
-
-## Example Scenarios
-
-### Scenario 1: Root cause investigation
-```
-User: /answer-issue 123 エラーの原因を特定して
-→ Read error message from issue → Search for error pattern → Analyze code → Report cause
-```
-
-### Scenario 2: Related files search
-```
-User: /answer-issue 456 どのファイルを修正すればいい？
-→ Parse feature request → Use Task (Explore) to find relevant files → Report with file:line
-```
-
-### Scenario 3: Impact assessment
-```
-User: /answer-issue 789 この修正の影響範囲は？
-→ Identify proposed change → Search for dependencies → Report affected areas
-```
-
-## Output Format
-
-Always structure response as:
-
-```markdown
-## Issue #<number>: <title>
-
-### 質問
-<user prompt>
-
-### 調査結果
-<direct answer with specific details>
-
-### 関連箇所
-- `file/path.go:123` - [description]
-- `file/other.go:456` - [description]
-
-### 推奨される次のステップ
-1. [actionable step]
-2. [if fix needed] `/work-on-issue <number>` を実行
-```
 
 ## Notes
 

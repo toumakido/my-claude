@@ -5,11 +5,7 @@ description: Analyze and fix GitHub issue
 
 Analyze and fix GitHub issue $ARGUMENTS
 
-Output language: Japanese, formal business tone
-
 ## Prerequisites
-
-- gh CLI installed and authenticated
 - $ARGUMENTS: issue number (123) or URL
 - Run from repository root
 
@@ -22,7 +18,7 @@ Output language: Japanese, formal business tone
 3. Analyze problem, confirm understanding with user via AskUserQuestion, propose fix approach
 4. Find related files using Task tool (subagent_type=Explore)
 5. Implement fix with Edit tool following "File Edit Guidelines" section below, avoid security issues (XSS, SQL injection), mark todos complete
-6. Run tests (unit, integration, e2e), add new tests if needed
+6. Run tests (unit, integration, e2e). Add new tests when: adding new functions/endpoints, fixing bugs without existing test coverage, or changing behavior
 7. Commit changes sequentially (do not commit until all fixes complete):
 ```bash
 git add <changed-files>
@@ -55,18 +51,7 @@ Before editing any file:
 2. Match existing style: language, comments, formatting, structure
 3. Only deviate from existing style if issue explicitly requires it
 
-Example (matching existing style):
-```go
-// Existing file has English comments
-func foo() error {
-    // existing comment
-}
-
-// Your addition - also in English
-func bar() error {
-    // process items
-}
-```
+Example: If existing code has English comments, use English. If Japanese, use Japanese.
 
 ## Notes
 

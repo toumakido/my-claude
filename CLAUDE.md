@@ -55,3 +55,11 @@ Commit format:
 
 Fixes #<issue_number>
 ```
+
+# Skills
+
+## Global Defaults
+
+All skills in this project assume:
+- Output language: Japanese, formal business tone
+- Prerequisites: gh CLI installed and authenticated
