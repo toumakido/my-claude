@@ -6,13 +6,10 @@ disable-model-invocation: true
 
 Review and optimize skills and CLAUDE.md for AI efficiency: $ARGUMENTS
 
-Output language: Japanese, formal business tone
-
 ## Prerequisites
 
 - Must run from toumakido/my-claude repository root
 - This skill only works for toumakido/my-claude repository
-- gh CLI installed and authenticated
 - Git working tree clean
 - $ARGUMENTS: Optional file paths (space-separated). If empty, all files are targeted.
 

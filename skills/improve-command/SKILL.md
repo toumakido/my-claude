@@ -6,11 +6,7 @@ disable-model-invocation: true
 
 Analyze skill usage and create improvement proposal issue
 
-Output language: Japanese, formal business tone
-
 ## Prerequisites
-
-- gh CLI installed and authenticated
 - Must be executed in same conversation session after using target skill
 - Working repository: Can be any repository where the skill was used
 - Issue target repository: https://github.com/toumakido/my-claude (determined dynamically or confirmed with user)
@@ -143,120 +139,29 @@ Output language: Japanese, formal business tone
 
 5.6. Apply generalization for private repositories:
 
-   **Condition**: Execute this step ONLY if `IS_PRIVATE` is true (determined in Step 3)
+   **Condition**: Only if `IS_PRIVATE` is true
 
-   **Purpose**: Automatically generalize code examples and identifiers when working repository is private
-
-   **Actions**:
-   1. Apply generalization patterns to issue body:
-
-      **Automatic pattern matching and replacement**:
-
-      a. Function/method names:
-      ```
-      Pattern: CamelCase words ending in common suffixes
-      - *Repository → EntityRepository, DataRepository
-      - *Service → ProcessService, RecordService
-      - *Handler → RequestHandler, EventHandler
-      - *Manager → ResourceManager, StateManager
-      - Get*/Fetch*/Post*/Put*/Delete* → Generic verb prefixes
-      ```
-
-      b. Repository/Gateway/Client names:
-      ```
-      Pattern: Variable names ending in Repository/Gateway/Client
-      - [a-z]+Repository → entityRepo, dataRepo, recordRepo
-      - [a-z]+Gateway → apiGateway, serviceGateway
-      - [a-z]+Client → httpClient, grpcClient
-      ```
-
-      c. Method names with business domain terms:
-      ```
-      Pattern: Domain-specific verbs + nouns
-      - Register* → RegisterEntity, RegisterItem
-      - Process* → ProcessRecord, ProcessData
-      - Calculate* → CalculateValue, CalculateTotal
-      - Validate* → ValidateInput, ValidateData
-      ```
-
-      d. Preserve technical patterns:
-      ```
-      Keep as-is:
-      - AWS service names: DynamoDB, S3, Lambda, etc.
-      - Standard methods: GetItem, PutItem, Query, Scan
-      - Error handling: error, err, context.Context, ctx
-      - Common patterns: TransactWriteItems, FilterExpression
-      ```
-
-   3. Generate generalization mapping (example patterns only, not shown to user):
-      ```
-      Original → Generalized (maintain consistency)
-      - UserAccountRepository → EntityRepository
-      - FetchCustomerDetails → GetEntityDetails
-      - paymentGatewayClient → externalServiceClient
-      - calculateMonthlyFee → calculateValue
-      ```
-
-   2. Apply replacements to issue body using regex patterns
-   3. Maintain consistency: same term → same generic name throughout issue body
-   4. Track generalization count (functions, repositories, domain terms) for Step 5.7
-
-   **Implementation guideline**:
-   - Use regex patterns to detect domain-specific terms
-   - Preserve code structure and technical accuracy
-   - Do not generalize AWS service names or standard library functions
-   - Refer to "Code Example Generalization" section (lines 296-356) for detailed guidelines:
-     - **Level 1 (MUST generalize)**: Function names, variable names, type names, table names
-     - **Level 2 (SHOULD generalize)**: Business terms, service names, company-specific terms
-     - **Level 3 (MAY keep specific)**: FilterExpression structure, query patterns, AWS service names
-     - **Level 4 (MUST keep specific)**: Language keywords, standard library, common patterns
-
-5.7. Confirm generalized content with user:
-
-   **Condition**: Execute this step ONLY if Step 5.6 was executed (i.e., `IS_PRIVATE` is true)
-
-   **Purpose**: Ensure generalization is appropriate before creating public issue
+   **Generalization rules**:
+   - MUST generalize: Function/variable/type names, table names, business terms
+   - KEEP specific: AWS service names (DynamoDB, S3), standard methods (GetItem, Query), language keywords, error patterns (ctx, err)
+   - Maintain consistency: same original term → same generic name throughout
 
    **Actions**:
-   1. Display generalization summary:
+   1. Identify domain-specific identifiers in issue body (function names ending in Repository/Service/Handler/Manager, business verbs like Register*/Process*/Calculate*)
+   2. Replace with generic equivalents (EntityRepository, ProcessRecord, calculateValue)
+   3. Track generalization count (functions, repositories, domain terms)
+
+5.7. Confirm generalized content:
+
+   **Condition**: Only if Step 5.6 executed
+
+   **Actions**:
+   1. Display summary:
       ```
-      ## 一般化サマリー
-
-      privateリポジトリのため、以下の情報を一般化しました:
-
-      関数名: N箇所
-      Repository名: M箇所
-      ドメイン用語: K箇所
-
-      一般化後のissue本文を確認しますか？
+      privateリポジトリのため一般化しました: 関数名N箇所, Repository名M箇所, ドメイン用語K箇所
       ```
-
-   2. Use AskUserQuestion:
-      - question: "一般化されたissue内容を確認しますか？"
-      - header: "Generalization"
-      - multiSelect: false
-      - options:
-        - label: "確認する", description: "一般化後の全文を表示"
-        - label: "このまま作成", description: "一般化を信頼してissue作成"
-        - label: "キャンセル", description: "issue作成を中止"
-
-   3. Handle response:
-      - "確認する": Display generalized issue body in full, then ask "この内容でissueを作成してよろしいですか？" and wait for user approval
-      - "このまま作成": Proceed to Step 6
-      - "キャンセル": Exit with message "Issue作成をキャンセルしました"
-
-   **Example output**:
-   ```
-   ## 一般化サマリー
-
-   privateリポジトリのため、以下の情報を一般化しました:
-
-   関数名: 8箇所 (CreateEntity, UpdateEntity, etc.)
-   Repository名: 5箇所 (entityRepository, dataRepository, etc.)
-   ドメイン用語: 3箇所 (generic business terms)
-
-   一般化後のissue本文を確認しますか？
-   ```
+   2. AskUserQuestion with options: "確認する" (show full body) / "このまま作成" (proceed) / "キャンセル" (exit)
+   3. If "確認する": Display body, wait for approval before Step 6
 
 6. Create GitHub issue:
 
@@ -330,7 +235,7 @@ Output language: Japanese, formal business tone
 - Compare skill specification with actual implementation steps
 - Identify missing error handling patterns
 - Note service-specific details not covered
-- Consider validation steps that could prevent issues
+- Identify validation steps that would prevent similar issues (e.g., type checks before operations, input validation)
 
 ### Prioritizing Suggestions
 - Critical: Issues that cause incorrect implementation
@@ -344,68 +249,6 @@ Output language: Japanese, formal business tone
 - No git history: Warn user but continue with conversation analysis only
 - gh CLI error: Display error and ask user to check authentication
 
-## Code Example Generalization
-
-When working repository is private, generalize code examples to avoid exposing confidential information.
-
-### Generalization Levels
-
-Apply generalization from most specific to most generic:
-
-**Level 1: Identifiers (MUST generalize)**
-- Function/handler names: Use generic names like `handlerA`, `processEntity`, `fetchData`
-- Variable names: Use generic names like `entityId`, `recordKey`, `value`
-- Type names: Use generic names like `Entity`, `Record`, `Item`
-- Database table names: Use generic names like `EntityTable`, `RecordStore`
-
-**Level 2: Domain concepts (SHOULD generalize)**
-- Business-specific terms: Replace with generic equivalents
-- Product/service names: Use placeholders like `ServiceA`, `ComponentX`
-- Company-specific terminology: Remove or replace with generic terms
-
-**Level 3: Technical patterns (MAY keep specific)**
-- FilterExpression structure: Can show actual syntax patterns
-- Query patterns: Can show structure without specific field names
-- AWS service names: DynamoDB, S3, Lambda (public knowledge)
-- Standard error patterns: Can show generic error handling
-
-**Level 4: Generic constructs (MUST keep specific)**
-- Language keywords: Keep as-is
-- Standard library functions: Keep as-is
-- Common patterns: `ctx context.Context`, `err error`
-
-### Generalization Guidelines
-
-1. **Avoid concrete examples**: Don't include specific struct definitions, actual field names, or real parameter values
-2. **Use abstract descriptions**: Describe patterns in prose rather than showing actual code
-3. **Focus on structure**: Show FilterExpression patterns, not actual field names
-4. **When in doubt, ask**: Use AskUserQuestion to confirm if specific terms should be generalized
-
-**Good example** (generalized):
-```
-FilterExpression with multiple conditions using OR and AND operators,
-checking for attribute existence and type
-```
-
-**Bad example** (too specific):
-```go
-FilterExpression: "(attribute_not_exists(#OpStatus) OR attribute_type(#OpStatus, :null)) AND (#RequestType = :rt)"
-```
-
-### Example Transformation
-
-```go
-// Actual code (private repository) - DO NOT include this in issue
-func (repo *UserRepository) GetActiveUsers(ctx context.Context, companyId string) ([]*User, error) {
-    return repo.dynamoDB.QueryByCompany(ctx, companyId, "active")
-}
-
-// Generalized code (for issue) - Use this level of abstraction
-func (repo *EntityRepository) FetchEntities(ctx context.Context, filterKey string) ([]*Entity, error) {
-    return repo.store.QueryByFilter(ctx, filterKey, filterValue)
-}
-```
-
 ## Notes
 
 - This skill works best when executed immediately after target skill usage
@@ -415,4 +258,4 @@ func (repo *EntityRepository) FetchEntities(ctx context.Context, filterKey strin
 - For private repositories:
   - Omit PR/commit links from issue (not accessible to public)
   - Generalize code examples to remove confidential information
-- Consider both technical gaps and documentation improvements
+- Address both technical gaps (missing steps, error handling) and documentation improvements (unclear guidance, missing examples)

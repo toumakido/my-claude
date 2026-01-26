@@ -5,11 +5,7 @@ description: Review GitHub Pull Request and provide insights for human reviewers
 
 Review GitHub Pull Request and provide insights for human reviewers: $ARGUMENTS
 
-Output language: Japanese, formal business tone
-
 ## Prerequisites
-
-- gh CLI installed and authenticated
 - $ARGUMENTS: PR number (123) or URL
 - Run from repository root
 
@@ -82,5 +78,5 @@ The review should be structured as follows:
 - For security issues, mark them clearly with WARNING and provide specific remediation steps
 - Provide actionable feedback with concrete suggestions
 - Highlight breaking changes or backward compatibility concerns
-- Consider integration points and system-wide impact
+- Analyze integration points (APIs, message queues, shared databases) and system-wide impact (breaking changes, performance, dependencies)
 - Omit redundant information that can be easily seen in the PR itself (title, author, file list, etc.)

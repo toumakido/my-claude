@@ -5,8 +5,6 @@ description: Restructure existing GitHub issue to clarify problem definition
 
 Restructure existing GitHub issue $ARGUMENTS to clarify problem definition
 
-Output language: Japanese, formal business tone
-
 ## Purpose
 
 Transform vague/incomplete issues into format that `/work-on-issue` can work with effectively. Focus on problem clarity, not implementation.
@@ -32,66 +30,12 @@ EOF
 
 ## Templates
 
-Bug:
+Use structure-issue templates (Bug/Feature/Enhancement sections), then append:
 ```
-## 概要
-[brief description]
-
-## 再現手順
-1. [step]
-
-## 期待される動作
-[expected]
-
-## 実際の動作
-[actual]
-
-## エラーメッセージ
-[error log]
-
-## 環境情報
-- OS: [e.g. macOS 14.0]
-
 ---
 <details>
 <summary>元の issue 内容</summary>
-[original]
-</details>
-```
-
-Feature:
-```
-## 概要
-[brief]
-
-## 背景・目的
-[why needed]
-
-## 期待される動作
-[how it should work]
-
----
-<details>
-<summary>元の issue 内容</summary>
-[original]
-</details>
-```
-
-Enhancement:
-```
-## 概要
-[brief]
-
-## 現状の問題点
-[current issue]
-
-## 期待される改善結果
-[expected improvement]
-
----
-<details>
-<summary>元の issue 内容</summary>
-[original]
+[original body]
 </details>
 ```
 
