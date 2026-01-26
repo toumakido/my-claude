@@ -56,6 +56,30 @@ Commit format:
 Fixes #<issue_number>
 ```
 
+# Development Best Practices
+
+**Automatically apply during all development**:
+
+## Skill Creation
+- Use `/best-practices` skill for validation
+- Set `disable-model-invocation: true` for side-effect workflows (deploy, commit, send-message)
+- Set `context: fork` for heavy file reading
+- Keep SKILL.md < 500 lines
+- Write clear description with "when to use"
+
+## CLAUDE.md Management
+- Keep < 500 lines at all times
+- Check line count before editing: `wc -l CLAUDE.md`
+- If > 500 after edit: Immediately move reference content to skills
+- Only include rules Claude cannot infer from code
+
+## Implementation
+- Always include verification (tests, lint, expected output)
+- Non-trivial changes: Use Plan mode first
+- Heavy file reading: Use subagent, return summary only
+- After 2 failed corrections: Run `/clear`, restart with better prompt
+- Between unrelated tasks: Run `/clear`
+
 # Skills
 
 ## Global Defaults
