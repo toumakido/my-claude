@@ -4,14 +4,17 @@
 
 ## 構成
 
-- `CLAUDE.md` - Claude Code全体のルール設定（約45行に最適化）
+- `CLAUDE.md` - Claude Code全体のルール設定
 - `skills/` - カスタムスキル（メインの拡張機能）
 - `agents/` - カスタムエージェント定義
 - `commands/` - レガシーコマンド（aws-sdk-go-v2関連のみ）
 
-### skills/ (推奨)
+### skills/
 
-GitHub issue/PR ワークフロー用のカスタムスキル:
+**開発支援**:
+- `best-practices` - Claude Code公式ベストプラクティス自動適用（Skill作成、CLAUDE.md管理、Context管理）
+
+**GitHub issue/PR ワークフロー**:
 - `structure-issue` - GitHub issue作成
 - `restructure-issue` - 既存issue整理
 - `answer-issue` - issue調査・回答

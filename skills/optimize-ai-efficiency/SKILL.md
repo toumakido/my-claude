@@ -1,7 +1,8 @@
 ---
 name: optimize-ai-efficiency
-description: Review and optimize skills and CLAUDE.md for AI efficiency
+description: Review and optimize skills and CLAUDE.md for AI efficiency. Use when reviewing project documentation or after skill creation.
 disable-model-invocation: true
+context: fork
 ---
 
 Review and optimize skills and CLAUDE.md for AI efficiency: $ARGUMENTS
@@ -34,17 +35,21 @@ Review and optimize skills and CLAUDE.md for AI efficiency: $ARGUMENTS
 
 6. Create branch: `optimize/ai-efficiency-YYYYMMDD` using `git checkout -b`
 
-7. Commit changes sequentially:
+7. Create single commit with format specified in CLAUDE.md:
    - Stage modified files only (from target list)
-   - Create commit with format specified in CLAUDE.md (no emoji suffixes)
+   - Create commit (no emoji suffixes)
 
-8. Create PR using pr-creator skill:
+8. Push branch: `git push -u origin optimize/ai-efficiency-YYYYMMDD`
+
+9. Follow pr-creator workflow to create PR:
    - Title format:
      - If $ARGUMENTS was empty: "optimize: AI efficiency improvements (YYYYMMDD)"
      - If $ARGUMENTS was specified: "optimize: AI efficiency for [file names] (YYYYMMDD)"
    - Body format follows PR Format section below
+   - Confirm draft status with user
+   - Execute `gh pr create` with appropriate flags
 
-9. Display PR URL and summary
+10. Display PR URL and summary
 
 ## Check Criteria
 
