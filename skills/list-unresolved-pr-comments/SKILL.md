@@ -1,4 +1,5 @@
 ---
+name: list-unresolved-pr-comments
 description: 指定したPRの未解決レビューコメントを一覧表示
 args:
   pr_number:

@@ -1,3 +1,8 @@
+---
+name: verify-pr
+description: Analyze PR implementation and provide verification instructions
+---
+
 Analyze PR implementation and provide verification instructions for $ARGUMENTS
 
 Output language: Japanese, formal business tone

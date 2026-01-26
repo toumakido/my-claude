@@ -1,11 +1,17 @@
-Review and optimize commands and CLAUDE.md for AI efficiency: $ARGUMENTS
+---
+name: optimize-ai-efficiency
+description: Review and optimize skills and CLAUDE.md for AI efficiency
+disable-model-invocation: true
+---
+
+Review and optimize skills and CLAUDE.md for AI efficiency: $ARGUMENTS
 
 Output language: Japanese, formal business tone
 
 ## Prerequisites
 
 - Must run from toumakido/my-claude repository root
-- This command only works for toumakido/my-claude repository
+- This skill only works for toumakido/my-claude repository
 - gh CLI installed and authenticated
 - Git working tree clean
 - $ARGUMENTS: Optional file paths (space-separated). If empty, all files are targeted.
@@ -19,7 +25,7 @@ Output language: Japanese, formal business tone
      - If any file doesn't exist: output error and exit
      - Use specified files as target list
    - If $ARGUMENTS is empty:
-     - Target all files: `commands/*.md`, `CLAUDE.md`, `.claude/*` (if exists)
+     - Target all files: `skills/*/SKILL.md`, `CLAUDE.md`, `.claude/*` (if exists)
 
 2. Read and analyze target files from step 1
 
@@ -53,7 +59,7 @@ Bad: Run tests if needed
 Good: If changes affect core logic: run `npm test`
 
 Bad: Update the file
-Good: Update `commands/example.md` using Edit tool
+Good: Update `skills/example/SKILL.md` using Edit tool
 
 Bad: Consider parallel execution
 Good: Execute these commands in parallel (independent)
@@ -128,7 +134,7 @@ Nice-to-have: Minor formatting, additional examples
 ## Summary
 
 ### Files Modified
-- commands/example.md: [changes]
+- skills/example/SKILL.md: [changes]
 - CLAUDE.md: [changes]
 
 ### Improvements
@@ -153,13 +159,13 @@ Nice-to-have: Minor formatting, additional examples
 # Optimize all files (default behavior)
 optimize-ai-efficiency
 
-# Optimize specific command files
-optimize-ai-efficiency commands/verify-migration-connections.md
+# Optimize specific skill files
+optimize-ai-efficiency skills/verify-migration-connections/SKILL.md
 
 # Optimize multiple files
-optimize-ai-efficiency commands/foo.md commands/bar.md CLAUDE.md
+optimize-ai-efficiency skills/foo/SKILL.md skills/bar/SKILL.md CLAUDE.md
 
-# Note: Glob patterns like commands/verify-*.md are expanded by shell before passing to command
+# Note: Glob patterns like skills/verify-*/SKILL.md are expanded by shell before passing to skill
 ```
 
 ## Notes
@@ -167,7 +173,7 @@ optimize-ai-efficiency commands/foo.md commands/bar.md CLAUDE.md
 - Only apply changes when genuine optimizations are identified
 - Do not make unnecessary changes for the sake of changing
 - Preserve human readability
-- Do not change command functionality
+- Do not change skill functionality
 - Prefer explicit over implicit
 - If breaking changes: confirm with user first
 - When $ARGUMENTS specifies files, only those files are analyzed and modified

@@ -23,10 +23,6 @@ Before using packages:
 - Stdlib: verify with `go doc <package>` if uncertain
 - Third-party: Read go.mod first. If missing: ask user, then `go get`, then use
 
-## Compile Errors
-
-Fix all editor-detected errors before completing (undefined vars, type mismatches, missing imports, nonexistent fields/methods)
-
 ## Comments
 
 Write only:
