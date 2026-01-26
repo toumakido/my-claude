@@ -23,7 +23,7 @@ Review and optimize skills and CLAUDE.md for AI efficiency: $ARGUMENTS
      - If any file doesn't exist: output error and exit
      - Use specified files as target list
    - If $ARGUMENTS is empty:
-     - Target all files: `skills/*/SKILL.md`, `CLAUDE.md`, `.claude/*` (if exists)
+     - Target all files: `skills/*/SKILL.md`, `CLAUDE.md` (if exists)
 
 2. Read and analyze target files from step 1
 
