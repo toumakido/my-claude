@@ -20,7 +20,7 @@ Example:
 ## Package Verification
 
 Before using packages:
-- Stdlib: verify with `go doc <package>` if uncertain
+- Stdlib: run `go doc <package>` and verify existence before using
 - Third-party: Read go.mod first. If missing: ask user, then `go get`, then use
 
 ## Comments
@@ -61,11 +61,11 @@ Fixes #<issue_number>
 **Automatically apply during all development**:
 
 ## Skill Creation
-- Use `/best-practices` skill for validation
 - Set `disable-model-invocation: true` for side-effect workflows (deploy, commit, send-message)
 - Set `context: fork` for heavy file reading
 - Keep SKILL.md < 500 lines
 - Write clear description with "when to use"
+- Validate against best practices before finalizing
 
 ## CLAUDE.md Management
 - Keep < 500 lines at all times
@@ -77,7 +77,7 @@ Fixes #<issue_number>
 - Always include verification (tests, lint, expected output)
 - Non-trivial changes: Use Plan mode first
 - Heavy file reading: Use subagent, return summary only
-- After 2 failed corrections: Run `/clear`, restart with better prompt
+- After 2 consecutive failed attempts: Run `/clear`, restart with refined approach
 - Between unrelated tasks: Run `/clear`
 
 # Skills
