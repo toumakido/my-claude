@@ -5,6 +5,7 @@ args:
   pr_number:
     description: PR番号（省略時は現在のブランチに紐づくPR）
     required: false
+disable-model-invocation: true
 ---
 
 

@@ -1,6 +1,7 @@
 ---
 name: work-on-issue
 description: Analyze and fix GitHub issue
+disable-model-invocation: true
 ---
 
 Analyze and fix GitHub issue $ARGUMENTS

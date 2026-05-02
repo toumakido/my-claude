@@ -1,6 +1,7 @@
 ---
 name: verify-pr
 description: Analyze PR implementation and provide verification instructions
+disable-model-invocation: true
 ---
 
 Analyze PR implementation and provide verification instructions for $ARGUMENTS

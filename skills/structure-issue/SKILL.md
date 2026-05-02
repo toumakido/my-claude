@@ -1,6 +1,7 @@
 ---
 name: structure-issue
 description: Create clear GitHub issue from user prompt
+disable-model-invocation: true
 ---
 
 Create clear GitHub issue from user prompt: $ARGUMENTS

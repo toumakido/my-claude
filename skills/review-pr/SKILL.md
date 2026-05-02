@@ -1,6 +1,7 @@
 ---
 name: review-pr
 description: Review GitHub Pull Request and provide insights for human reviewers
+disable-model-invocation: true
 ---
 
 Review GitHub Pull Request and provide insights for human reviewers: $ARGUMENTS

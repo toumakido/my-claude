@@ -3,6 +3,7 @@ name: optimize-ai-efficiency
 description: Review and optimize skills and CLAUDE.md for AI efficiency. Use when reviewing project documentation or after skill creation.
 disable-model-invocation: true
 context: fork
+disable-model-invocation: true
 ---
 
 Review and optimize skills and CLAUDE.md for AI efficiency: $ARGUMENTS
